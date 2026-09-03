@@ -1,0 +1,75 @@
+name: Bug report
+description: Something does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: open the **Engine** section and press **Verify only**.
+        Most download failures are a stale engine, and that check either fixes
+        it or tells us exactly which stage broke.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Ambaar version
+      description: From the release you downloaded, or the commit if built from source.
+      placeholder: v1.1.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How are you running it
+      options:
+        - Downloaded release (Windows)
+        - Downloaded release (macOS)
+        - Downloaded release (Linux)
+        - From source
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11 23H2 / macOS 14.5 / Ubuntu 24.04
+    validations:
+      required: true
+
+  - type: textarea
+    id: engine
+    attributes:
+      label: Engine status
+      description: |
+        Copy the four lines from the Engine section: Version, Source, Last
+        checked, Verification. This is the single most useful thing you can
+        include -- it distinguishes a stale engine from an actual bug.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: activity
+    attributes:
+      label: Activity log
+      description: Output from the Activity section for the failed download.
+      render: text
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Doctor output
+      description: |
+        If running from source, paste `python packaging/doctor.py`. Skip this
+        for a downloaded release.
+      render: text

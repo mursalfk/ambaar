@@ -26,6 +26,7 @@ from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
 from . import ffmpeg as ffmpeg_tool
+from . import jsruntime
 from .paths import data_dir, default_download_dir
 
 CONFIG_FILE = data_dir() / "settings.json"
@@ -187,6 +188,14 @@ def build_opts(settings: Settings, hooks: dict) -> dict:
     ffmpeg_path, _ = ffmpeg_tool.find()
     if ffmpeg_path:
         opts["ffmpeg_location"] = str(ffmpeg_path.parent)
+
+    # Same for a managed Deno. Without a JS runtime yt-dlp cannot solve nsig and
+    # silently returns fewer formats, so this is worth wiring up even though
+    # nothing visibly fails without it.
+    deno = jsruntime.find()
+    if deno:
+        opts.setdefault("extractor_args", {})
+        opts["js_runtimes"] = {"deno": {"path": [str(deno)]}}
 
     rate = parse_rate(settings.limit_rate)
     if rate:

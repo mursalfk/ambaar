@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Downloads failing after working before
+    url: https://github.com/mursalfk/ambaar#when-a-download-fails
+    about: Almost always a stale engine. Engine section, Verify only, then Check for updates.
+  - name: Everything is 360p, or audio has no video
+    url: https://github.com/mursalfk/ambaar#using-it
+    about: ffmpeg is missing. The Engine section can install it.

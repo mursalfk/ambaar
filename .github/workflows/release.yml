@@ -14,7 +14,19 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pytest
+      - run: pytest -q
+
   build:
+    needs: test
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -27,7 +39,11 @@ jobs:
           - os: macos-latest
             label: macOS (Apple silicon)
             artifact: ambaar-macos-arm64
-          - os: macos-13
+          # macos-13 was retired in December 2025. macos-15-intel is GitHub's
+          # replacement label for x86_64 Mac builds -- using the old one does
+          # not fail, it queues forever waiting for a runner that no longer
+          # exists.
+          - os: macos-15-intel
             label: macOS (Intel)
             artifact: ambaar-macos-x86_64
           - os: ubuntu-22.04

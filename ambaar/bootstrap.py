@@ -33,7 +33,8 @@ from .paths import engine_dir, is_frozen
 
 __all__ = [
     "active_engine", "set_active_engine", "clear_active_engine",
-    "prune_engines", "prepare_engine_path", "bundled_version", "engine_dir",
+    "prune_engines", "prepare_engine_path", "engine_source", "bundled_version",
+    "engine_dir",
 ]
 
 MARKER = "active.json"
@@ -87,6 +88,18 @@ def prune_engines(keep: int = 2) -> None:
         shutil.rmtree(path, ignore_errors=True)
 
 
+# Set once by prepare_engine_path() at startup and read afterwards. The
+# function has to run before yt_dlp is imported, so calling it later just to
+# read a status string returns "already imported" no matter what actually
+# happened -- which is how the Engine page ended up lying about its own source.
+_RESOLUTION = "not yet resolved"
+
+
+def engine_source() -> str:
+    """What prepare_engine_path() decided at startup. Safe to call any time."""
+    return _RESOLUTION
+
+
 def prepare_engine_path() -> str:
     """
     Put the managed engine ahead of the bundled one on sys.path.
@@ -94,23 +107,29 @@ def prepare_engine_path() -> str:
     Returns a short description of what was selected, for logging. Safe to call
     more than once. Does nothing outside a frozen build.
     """
+    global _RESOLUTION
+
     if not is_frozen():
-        return "source checkout: using the environment's yt-dlp"
+        _RESOLUTION = "source checkout: using the environment's yt-dlp"
+        return _RESOLUTION
 
     if "yt_dlp" in sys.modules:
         # Too late to change the import; report honestly rather than pretend.
-        return "yt_dlp already imported; managed engine not applied"
+        _RESOLUTION = "yt_dlp already imported; managed engine not applied"
+        return _RESOLUTION
 
     selected = active_engine()
     if not selected:
-        return "using the bundled engine"
+        _RESOLUTION = "using the bundled engine"
+        return _RESOLUTION
 
     version, path = selected
     entry = str(path)
     if entry in sys.path:
         sys.path.remove(entry)
     sys.path.insert(0, entry)
-    return f"using managed engine {version}"
+    _RESOLUTION = f"using managed engine {version}"
+    return _RESOLUTION
 
 
 def bundled_version() -> str:

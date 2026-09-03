@@ -27,8 +27,9 @@ from PySide6.QtWidgets import (
 
 from . import branding
 from . import ffmpeg as ffmpeg_tool
+from . import jsruntime
 from . import theme, updater
-from .bootstrap import prepare_engine_path
+from .bootstrap import engine_source
 from .engine import QUALITY_MAP, DownloadManager, Job, Settings
 from .paths import data_dir
 from .widgets import ROW_HEIGHT, ComboBox, EmptyState, EngineBadge, JobDelegate, SpinBox
@@ -66,17 +67,21 @@ class UpdateTask(QRunnable):
         self.signals.done.emit(outcome)
 
 
-class FfmpegTask(QRunnable):
-    def __init__(self) -> None:
+class ToolTask(QRunnable):
+    """Downloads a managed tool (ffmpeg, Deno). Network work, never on the GUI thread."""
+
+    def __init__(self, module, name: str) -> None:
         super().__init__()
         self.signals = TaskSignals()
+        self.module = module
+        self.name = name
 
     @Slot()
     def run(self) -> None:
-        ok, message = ffmpeg_tool.fetch(
+        ok, message = self.module.fetch(
             on_progress=lambda msg, pct: self.signals.progress.emit(msg)
         )
-        self.signals.done.emit((ok, message))
+        self.signals.done.emit((ok, message, self.name))
 
 
 # --------------------------------------------------------------------------- #
@@ -506,6 +511,28 @@ class MainWindow(QMainWindow):
             "it, downloads quietly fall back to a low-quality single stream.", "hint")
         ff_hint.setWordWrap(True)
         col.addWidget(ff_hint)
+        col.addWidget(rule())
+
+        col.addWidget(label("JAVASCRIPT RUNTIME", "label"))
+        f3 = QFormLayout()
+        f3.setSpacing(11)
+        self.lbl_deno = QLabel("--")
+        self.lbl_deno.setWordWrap(True)
+        f3.addRow("Status", self.lbl_deno)
+        col.addLayout(f3)
+
+        self.btn_deno = QPushButton("Install runtime")
+        self.btn_deno.setProperty("variant", "ghost")
+        self.btn_deno.clicked.connect(self._install_deno)
+        col.addWidget(row(self.btn_deno))
+
+        js_hint = label(
+            "YouTube obfuscates its format URLs behind a JavaScript challenge. "
+            "yt-dlp needs a runtime to solve it; without one it falls back to "
+            "weaker extraction and some formats never appear. Downloads still "
+            "succeed, they are just worse.", "hint")
+        js_hint.setWordWrap(True)
+        col.addWidget(js_hint)
 
         self.update_log = QTextEdit()
         self.update_log.setReadOnly(True)
@@ -767,7 +794,7 @@ class MainWindow(QMainWindow):
         state = updater.UpdaterState.load()
         version = state.installed_version or updater.installed_version() or "unknown"
         self.lbl_version.setText(version)
-        self.lbl_source.setText(prepare_engine_path())
+        self.lbl_source.setText(engine_source())
 
         if state.last_check:
             try:
@@ -793,6 +820,7 @@ class MainWindow(QMainWindow):
         self.lbl_health.setToolTip(state.last_probe_detail or "")
         self.lbl_health.setStyle(self.lbl_health.style())
         self._refresh_ffmpeg()
+        self._refresh_deno()
 
     def _refresh_ffmpeg(self) -> None:
         if ffmpeg_tool.available():
@@ -815,20 +843,50 @@ class MainWindow(QMainWindow):
             return
         self.btn_ffmpeg.setEnabled(False)
         self._show_page(2, sync_nav=True)
-        task = FfmpegTask()
+        task = ToolTask(ffmpeg_tool, "ffmpeg")
         task.signals.progress.connect(self._append_update_log)
-        task.signals.done.connect(self._on_ffmpeg_done)
+        task.signals.done.connect(self._on_tool_done)
+        self.tasks.start(task)
+
+    def _install_deno(self) -> None:
+        if not jsruntime.can_fetch():
+            QMessageBox.information(
+                self, "Install a JavaScript runtime",
+                "No automatic download is available for this platform.\n\n"
+                f"Install it with:\n\n    {jsruntime.install_instructions()}")
+            return
+        self.btn_deno.setEnabled(False)
+        self._show_page(2, sync_nav=True)
+        task = ToolTask(jsruntime, "deno")
+        task.signals.progress.connect(self._append_update_log)
+        task.signals.done.connect(self._on_tool_done)
         self.tasks.start(task)
 
     @Slot(object)
-    def _on_ffmpeg_done(self, result) -> None:
-        ok, message = result
+    def _on_tool_done(self, result) -> None:
+        ok, message, name = result
         self.btn_ffmpeg.setEnabled(True)
+        self.btn_deno.setEnabled(True)
         self._append_update_log(message)
         self._refresh_ffmpeg()
-        self._status(message if ok else "ffmpeg install failed")
+        self._refresh_deno()
+        self._status(message if ok else f"{name} install failed")
         if not ok:
-            QMessageBox.warning(self, "ffmpeg", message)
+            QMessageBox.warning(self, name, message)
+
+    def _refresh_deno(self) -> None:
+        if jsruntime.available():
+            v = jsruntime.version() or "installed"
+            self.lbl_deno.setText(f"installed: {v}")
+            self.lbl_deno.setProperty("state", "ok")
+            self.btn_deno.setText("Reinstall runtime")
+        else:
+            self.lbl_deno.setText(
+                "not found. yt-dlp cannot solve YouTube's nsig challenge without "
+                "one, so some higher-quality formats will be missing.")
+            self.lbl_deno.setProperty("state", "warn")
+            self.btn_deno.setText("Install runtime")
+        self.lbl_deno.setStyle(self.lbl_deno.style())
 
     # -- first run ----------------------------------------------------------- #
 
@@ -847,6 +905,18 @@ class MainWindow(QMainWindow):
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
             if reply == QMessageBox.Yes:
                 self._install_ffmpeg()
+                return
+
+        if not jsruntime.available() and jsruntime.can_fetch():
+            reply = QMessageBox.question(
+                self, "JavaScript runtime recommended",
+                "No JavaScript runtime was found.\n\nYouTube hides its format "
+                "URLs behind a JavaScript challenge. Without a runtime, some "
+                "higher-quality formats will silently never appear.\n\n"
+                "Download Deno now? It is about 40 MB.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if reply == QMessageBox.Yes:
+                self._install_deno()
 
     def _python_dialog(self, problem: str) -> None:
         need = ".".join(str(x) for x in updater.MIN_PYTHON)

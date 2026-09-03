@@ -1,0 +1,49 @@
+name: Build or packaging problem
+description: The app will not start, or will not build
+labels: [build]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Run `python packaging/doctor.py` first.** It checks the things that
+        actually break: Python version, Qt package agreement, whether Qt
+        imports, and foreign Qt DLLs on PATH.
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Doctor output
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: error
+    attributes:
+      label: The full error
+      description: Complete traceback or build log, not just the last line.
+      render: text
+    validations:
+      required: true
+
+  - type: dropdown
+    id: source_runs
+    attributes:
+      label: Does `python main.py` work?
+      description: |
+        This single answer splits the problem in half. Working from source
+        with a broken build means packaging; both broken means environment.
+      options:
+        - "Yes, source runs fine; only the packaged build fails"
+        - "No, source fails too"
+        - "Have not tried"
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Python, PySide6, and PyInstaller versions
+      placeholder: "3.12.10 / 6.11.2 / 6.11.1"
+    validations:
+      required: true
