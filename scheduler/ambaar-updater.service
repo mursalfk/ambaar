@@ -1,0 +1,23 @@
+# Linux (systemd user unit): weekly yt-dlp update + verification.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp ambaar-updater.{service,timer} ~/.config/systemd/user/
+#   # edit the paths below first
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now ambaar-updater.timer
+#   systemctl --user start ambaar-updater.service   # test run
+#   journalctl --user -u ambaar-updater -n 50       # read the output
+#
+# If you want it to run while you are logged out:
+#   sudo loginctl enable-linger $USER
+
+[Unit]
+Description=Update and verify the yt-dlp engine for Ambaar
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/ambaar
+ExecStart=%h/code/ambaar/.venv/bin/python -m ambaar.updater --force

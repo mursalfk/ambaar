@@ -1,0 +1,27 @@
+# Normalise line endings. You develop on Windows and the CI runners are Linux
+# and macOS, so without this the shell scripts get committed with CRLF and fail
+# on the runners with "bad interpreter: /usr/bin/env bash^M" -- an error that
+# looks like a missing dependency and is not.
+
+* text=auto eol=lf
+
+# Must stay LF regardless of platform: these run on Linux and macOS.
+*.sh            text eol=lf
+*.service       text eol=lf
+*.timer         text eol=lf
+*.plist         text eol=lf
+
+# Must stay CRLF: PowerShell is happiest with Windows endings.
+*.ps1           text eol=crlf
+
+# Binary. Never touch these.
+*.png           binary
+*.ico           binary
+*.icns          binary
+*.ttf           binary
+*.otf           binary
+*.zip           binary
+*.rar           binary
+
+# Collapse generated art in diffs. It is regenerated, not hand-edited.
+assets/brand/*.png    -diff

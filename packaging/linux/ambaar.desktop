@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Ambaar
+GenericName=Download Manager
+Comment=Download videos and audio with a self-verifying engine
+Exec=ambaar %U
+Icon=ambaar
+Terminal=false
+Categories=AudioVideo;Network;Utility;
+Keywords=download;video;youtube;yt-dlp;
+StartupWMClass=ambaar

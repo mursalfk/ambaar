@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"
+     viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#0f0e0c"/>
+  <g transform="translate(81.91999999999999,67.17439999999999)">
+  <g stroke-linecap="square" stroke-linejoin="miter" fill="none">
+    <!-- descending arrow -->
+    <path d="M174.08 48.7424 L174.08 156.67200000000003" stroke="#e07b39" stroke-width="31.334400000000002"/>
+    <path d="M114.89280000000001 111.41120000000001 L174.08 174.08 L233.2672 111.41120000000001"
+          stroke="#e07b39" stroke-width="31.334400000000002"/>
+    <!-- the heap: three bars, widening -->
+    <path d="M132.3008 229.78560000000002 L215.85920000000002 229.78560000000002" stroke="#f2efe9" stroke-width="31.334400000000002"/>
+    <path d="M104.44800000000001 278.528 L243.71200000000002 278.528" stroke="#f2efe9" stroke-width="31.334400000000002"/>
+    <path d="M76.5952 327.2704 L271.5648 327.2704" stroke="#e07b39" stroke-width="31.334400000000002"/>
+  </g>
+  </g>
+</svg>

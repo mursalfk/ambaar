@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ambaar"
+version = "1.1.0"
+description = "Desktop download manager with a self-verifying yt-dlp engine updater"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Mursal Furqan Kumbhar" }]
+keywords = ["yt-dlp", "downloader", "gui", "pyside6"]
+classifiers = [
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video",
+]
+dependencies = [
+    "yt-dlp>=2024.1.1",
+    "PySide6>=6.6.0",
+]
+
+[project.optional-dependencies]
+build = ["pyinstaller>=6.3", "pillow>=10.0"]
+
+[project.gui-scripts]
+ambaar = "ambaar.__main__:main"
+
+[project.scripts]
+ambaar-updater = "ambaar.updater:main"
+
+[project.urls]
+Homepage = "https://mursalfk.vercel.app"
+
+[tool.setuptools]
+packages = ["ambaar"]
+
+[tool.setuptools.package-data]
+ambaar = ["../assets/fonts/*"]

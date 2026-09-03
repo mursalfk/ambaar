@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.org/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS: weekly yt-dlp update + verification.
+
+  Install:
+    1. Edit PYTHON_PATH and PROJECT_DIR below to absolute paths.
+    2. cp com.ambaar.updater.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.ambaar.updater.plist
+    4. launchctl start com.ambaar.updater      # run once now to test
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.ambaar.updater.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ambaar.updater</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>PYTHON_PATH</string>
+        <string>-m</string>
+        <string>ambaar.updater</string>
+        <string>--force</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>PROJECT_DIR</string>
+
+    <!-- Sundays at 04:00 local time. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key><integer>0</integer>
+        <key>Hour</key><integer>4</integer>
+        <key>Minute</key><integer>0</integer>
+    </dict>
+
+    <!-- If the machine was asleep at 04:00, run once it wakes. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/ambaar-updater.out</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/ambaar-updater.err</string>
+</dict>
+</plist>

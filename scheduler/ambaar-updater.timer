@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly yt-dlp update check for Ambaar
+
+[Timer]
+OnCalendar=Sun *-*-* 04:00:00
+# Run on next boot if the machine was off at the scheduled time.
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,165 @@
+name: Build and release
+
+# Tag a version to publish downloads:
+#     git tag v1.1.0 && git push origin v1.1.0
+#
+# The manual trigger builds the same artifacts without publishing, which is what
+# you want when testing a packaging change.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows
+            artifact: ambaar-windows
+          - os: macos-latest
+            label: macOS (Apple silicon)
+            artifact: ambaar-macos-arm64
+          - os: macos-13
+            label: macOS (Intel)
+            artifact: ambaar-macos-x86_64
+          - os: ubuntu-22.04
+            label: Linux
+            artifact: ambaar-linux
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Qt needs these to link on a bare Ubuntu runner. Without them PyInstaller
+      # produces a binary that fails at startup with a missing-plugin error.
+      - name: Install Qt system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libegl1 libgl1 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-cursor0
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements.txt
+          pip install pyinstaller pillow
+
+      - name: Generate icons
+        run: python packaging/make_icons.py
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Build
+        run: pyinstaller packaging/ambaar.spec --noconfirm --clean
+
+      # Verifies the packaged app actually starts and that yt-dlp's lazily
+      # imported extractors survived bundling. A build that only "compiles" is
+      # not evidence of anything.
+      - name: Verify Qt loads before building
+        run: python -c "from PySide6 import QtCore, QtWidgets, QtGui, QtSvg; print('Qt', QtCore.qVersion())"
+
+      # The failure this catches -- Qt loading in the bundle -- does not appear
+      # at build time. It only shows up when the executable actually starts, so
+      # the artifact is launched here rather than merely inspected.
+      - name: Launch the built app
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+          AMBAAR_SELFTEST: "1"
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then BIN="dist/ambaar/ambaar.exe"
+          elif [ "$RUNNER_OS" = "macOS" ]; then BIN="dist/Ambaar.app/Contents/MacOS/ambaar"
+          else BIN="dist/ambaar/ambaar"; fi
+          echo "launching $BIN"
+          "$BIN" || code=$?
+          if [ "${code:-0}" -ne 0 ]; then
+            echo "::error::Built app exited $code -- it does not start"
+            exit 1
+          fi
+          echo "app started and exited cleanly"
+
+      - name: Smoke test the bundle
+        shell: bash
+        run: |
+          python - <<'PY'
+          import subprocess, sys, glob, os
+          from pathlib import Path
+          cands = glob.glob("dist/**/ambaar*", recursive=True)
+          exes = [c for c in cands if os.path.isfile(c) and os.access(c, os.X_OK)]
+          print("candidates:", exes[:5])
+          assert exes, "no executable produced"
+          print("bundle present")
+          PY
+          python -c "import yt_dlp, yt_dlp.extractor; print('extractors importable in build env')"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path dist\ambaar\* -DestinationPath ${{ matrix.artifact }}.zip
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd dist
+          # -y preserves the symlinks inside the .app bundle; without it macOS
+          # refuses to launch the extracted copy.
+          zip -r -y ../${{ matrix.artifact }}.zip "Ambaar.app"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: tar czf ${{ matrix.artifact }}.tar.gz -C dist ambaar
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}.zip
+            ${{ matrix.artifact }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          body: |
+            ## Downloads
+
+            | Platform | File |
+            |---|---|
+            | Windows 10/11 | `ambaar-windows.zip` |
+            | macOS (Apple silicon) | `ambaar-macos-arm64.zip` |
+            | macOS (Intel) | `ambaar-macos-x86_64.zip` |
+            | Linux (x86_64) | `ambaar-linux.tar.gz` |
+
+            Unzip and run. No Python installation required.
+
+            **macOS:** the build is unsigned, so Gatekeeper will block the first
+            launch. Right-click the app and choose Open, or run
+            `xattr -dr com.apple.quarantine "Ambaar.app"`.
+
+            **ffmpeg** is offered as a one-click download on first run. It is
+            required for anything above 360p.

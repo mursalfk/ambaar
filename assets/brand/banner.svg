@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640"
+     viewBox="0 0 1280 640">
+  <rect width="1280" height="640" fill="#0f0e0c"/>
+  <g transform="translate(544.0,153.6)">
+  <g stroke-linecap="square" stroke-linejoin="miter" fill="none">
+    <!-- descending arrow -->
+    <path d="M96.0 26.88 L96.0 86.39999999999999" stroke="#e07b39" stroke-width="17.28"/>
+    <path d="M63.36 61.44 L96.0 96.0 L128.64 61.44"
+          stroke="#e07b39" stroke-width="17.28"/>
+    <!-- the heap: three bars, widening -->
+    <path d="M72.96 126.72 L119.03999999999999 126.72" stroke="#f2efe9" stroke-width="17.28"/>
+    <path d="M57.599999999999994 153.6 L134.4 153.6" stroke="#f2efe9" stroke-width="17.28"/>
+    <path d="M42.239999999999995 180.48 L149.76 180.48" stroke="#e07b39" stroke-width="17.28"/>
+  </g>
+  </g>
+  <text x="640.0" y="422" text-anchor="middle"
+        font-family="Space Grotesk, Inter, Segoe UI, Helvetica, sans-serif"
+        font-size="74" font-weight="600" fill="#f2efe9">Ambaar</text>
+  <text x="640.0" y="483" text-anchor="middle"
+        font-family="DM Mono, JetBrains Mono, Consolas, monospace"
+        font-size="22" fill="#6d675e"
+        letter-spacing="5.8">THE ENGINE VERIFIES ITSELF</text>
+  <rect x="610.0" y="538" width="60" height="3" fill="#e07b39"/>
+</svg>
