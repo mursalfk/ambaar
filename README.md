@@ -1,3 +1,4 @@
+<!-- README.md -->
 <p align="center">
   <img src="assets/brand/lockup-dark.png" alt="Ambaar" width="440">
 </p>
@@ -26,12 +27,12 @@ trusting it, and rolls back automatically when it cannot.
 
 No Python needed. Unzip and run.
 
-| Platform | File |
-|---|---|
-| Windows 10/11 | `ambaar-windows.zip` |
-| macOS, Apple silicon | `ambaar-macos-arm64.zip` |
-| macOS, Intel | `ambaar-macos-x86_64.zip` |
-| Linux, x86_64 | `ambaar-linux.tar.gz` |
+| Platform             | File                      |
+| -------------------- | ------------------------- |
+| Windows 10/11        | `ambaar-windows.zip`      |
+| macOS, Apple silicon | `ambaar-macos-arm64.zip`  |
+| macOS, Intel         | `ambaar-macos-x86_64.zip` |
+| Linux, x86_64        | `ambaar-linux.tar.gz`     |
 
 Get the latest from the **Releases** page.
 
@@ -49,14 +50,19 @@ the launcher picks up the icon.
 ### Your first download
 
 1. Copy a video or playlist link.
-2. Press **Paste**, or paste into the bar and press Enter.
-3. Ambaar checks the link and adds it to the queue with a **VIDEO** or
+2. Paste it into the bar. There is no second step: the link leaves the bar and
+   becomes a row in the list, marked Resolving while Ambaar checks it. The
+   **Paste** button does the same from the clipboard, and **Add** (or Enter)
+   adds a link you typed. Clicking away from the bar adds it too.
+3. When the check finishes the row becomes Ready, with a **VIDEO** or
    **PLAYLIST** tag, a thumbnail, and its title. Nothing downloads yet.
-4. Press **Download** on the row, or **Download all** in the header.
+4. Press the download icon on the row, or **Download all** in the header.
 
 Paste several links at once, separated by spaces or commas; each becomes its
 own row. A link that is not a video or playlist is rejected with the reason.
-A playlist downloads every item into its own folder.
+Text that is not a link is left in the bar for you to fix, and only Enter or
+**Add** tells you it was not a link. A playlist downloads every item into its
+own folder.
 
 **ffmpeg is required** for anything above 360p. On first run Ambaar detects
 whether you have it and offers a one-click install on Windows and Linux; on
@@ -72,27 +78,33 @@ tag, and live metrics. The marks are shapes rather than colours alone, so the
 queue stays readable if you cannot separate the ember from the green. States
 that share a shape are told apart by the status word beside it.
 
-| Mark | State | Meaning |
-|---|---|---|
-| square | Ready | checked and waiting for you to press Download |
-| square | Queued | waiting for a free slot, or for a retry countdown |
-| square | Paused | stopped; partial file kept, press Resume |
-| arrow | Resolving | checking the link, no bytes yet |
-| arrow | Downloading | transferring; the hairline at the row's base is progress |
-| rotated square | Processing | ffmpeg is merging, converting, or embedding |
-| check | Done | finished |
-| cross | Failed | the second line explains why |
-| dash | Cancelled | stopped by you |
+| Mark           | State       | Meaning                                                  |
+| -------------- | ----------- | -------------------------------------------------------- |
+| square         | Ready       | checked and waiting for you to press Download            |
+| square         | Queued      | waiting for a free slot, or for a retry countdown        |
+| square         | Paused      | stopped; partial file kept, press Resume                 |
+| arrow          | Resolving   | checking the link, no bytes yet                          |
+| arrow          | Downloading | transferring; the hairline at the row's base is progress |
+| rotated square | Processing  | ffmpeg is merging, converting, or embedding              |
+| check          | Done        | finished                                                 |
+| cross          | Failed      | the second line explains why                             |
+| dash           | Cancelled   | stopped by you                                           |
 
-Buttons sit on the row and change with its state:
+Icon buttons sit at the right of each row and change with its state. Rest the
+pointer on one to see its name.
 
-| State | Buttons |
-|---|---|
-| Ready | Download, Options, Remove (playlists also get Items) |
-| Downloading | Pause, Cancel |
-| Paused | Resume, Cancel |
-| Done | Open folder, Remove |
-| Failed, Cancelled | Retry, Remove |
+| State                         | Icons                                                |
+| ----------------------------- | ---------------------------------------------------- |
+| Resolving, Queued, Processing | Cancel                                               |
+| Ready                         | Download, Options, Remove (playlists also get Items) |
+| Downloading                   | Pause, Cancel                                        |
+| Paused                        | Resume, Cancel                                       |
+| Done                          | Open folder, Remove                                  |
+| Failed, Cancelled             | Retry, Remove                                        |
+
+The header keeps the actions that cover the whole list: **Download all**,
+**Pause all**, **Resume all**, and a **More** menu holding Cancel selected,
+Retry selected, Clear finished and Clear queue.
 
 **Double-click a row** to act on it: a finished video plays in your default
 player, a finished playlist opens its folder, and a Ready row starts.
@@ -150,16 +162,16 @@ and is saved with the queue.
 
 ### Keyboard
 
-| Key | Does |
-|---|---|
-| Ctrl+Shift+V | add the link on the clipboard |
-| Ctrl+L | focus the link bar |
-| Ctrl+1 to 5 | go to Queue, History, Settings, Engine, Activity |
-| Ctrl+Shift+D / P / R | download all / pause all / resume all |
-| Space | on selected rows: pause, resume, download or retry, whichever fits |
-| Enter | open a finished item, or start a Ready one |
-| Delete | remove selected rows that are not running |
-| Ctrl+V (queue focused) | add the link on the clipboard |
+| Key                    | Does                                                               |
+| ---------------------- | ------------------------------------------------------------------ |
+| Ctrl+Shift+V           | add the link on the clipboard                                      |
+| Ctrl+L                 | focus the link bar                                                 |
+| Ctrl+1 to 5            | go to Queue, History, Settings, Engine, Activity                   |
+| Ctrl+Shift+D / P / R   | download all / pause all / resume all                              |
+| Space                  | on selected rows: pause, resume, download or retry, whichever fits |
+| Enter                  | open a finished item, or start a Ready one                         |
+| Delete                 | remove selected rows that are not running                          |
+| Ctrl+V (queue focused) | add the link on the clipboard                                      |
 
 ### Settings worth knowing
 
@@ -206,13 +218,13 @@ whether the engine still works.
 The second line of a failed row names the cause in plain language. The common
 ones:
 
-| What you see | What to do |
-|---|---|
+| What you see                       | What to do                                         |
+| ---------------------------------- | -------------------------------------------------- |
 | Format not available / only images | Engine is stale. Engine section, Check for updates |
-| 403 on the media URL | Same — signature deciphering broke |
-| Sign in to confirm | Set **Cookies from** to a signed-in browser |
-| Video unavailable | The video is gone. Not fixable here |
-| An ffmpeg step failed | Engine section, Install ffmpeg |
+| 403 on the media URL               | Same — signature deciphering broke                 |
+| Sign in to confirm                 | Set **Cookies from** to a signed-in browser        |
+| Video unavailable                  | The video is gone. Not fixable here                |
+| An ffmpeg step failed              | Engine section, Install ffmpeg                     |
 
 Full engine output lives in the **Activity** section.
 
@@ -402,11 +414,11 @@ the grouping and the call is silently ignored.
 
 Three icons, three places:
 
-| What | Set by |
-|---|---|
-| Title bar and alt-tab | `app.setWindowIcon()` in `branding.apply()` |
-| Taskbar button | the AppUserModelID call, plus the window icon |
-| The `.exe` in Explorer | `icon=` in `packaging/ambaar.spec` |
+| What                   | Set by                                        |
+| ---------------------- | --------------------------------------------- |
+| Title bar and alt-tab  | `app.setWindowIcon()` in `branding.apply()`   |
+| Taskbar button         | the AppUserModelID call, plus the window icon |
+| The `.exe` in Explorer | `icon=` in `packaging/ambaar.spec`            |
 
 Regenerate after any change to the mark:
 
@@ -419,22 +431,22 @@ python packaging/make_icons.py    # per-size PNGs, .ico, .icns on macOS
 
 ## Where things live
 
-| Path | Contents |
-|---|---|
-| `ambaar/app.py` | main window, sidebar, queue |
-| `ambaar/engine.py` | settings, jobs, worker threads, error diagnosis |
-| `ambaar/updater.py` | update, verify, roll back; also a CLI |
-| `ambaar/bootstrap.py` | engine path resolution for packaged builds |
-| `ambaar/branding.py` | window icon and Windows taskbar identity |
-| `ambaar/theme.py` | every colour, font, and metric in the app |
-| `ambaar/widgets.py` | painted marks, row delegate, empty state |
-| `ambaar/store.py` | SQLite queue and history |
-| `ambaar/links.py` | link keys, duplicate detection, clipboard filter |
-| `ambaar/space.py` | size estimates and the disk-space check |
-| `ambaar/formatdialog.py`, `itemsdialog.py`, `logdialog.py`, `historypage.py` | per-item options, playlist picker, log, history |
-| `ambaar/thumbs.py` | thumbnail cache |
-| `ambaar/ffmpeg.py` | ffmpeg discovery and download |
-| `ambaar/paths.py` | per-user data locations |
+| Path                                                                         | Contents                                         |
+| ---------------------------------------------------------------------------- | ------------------------------------------------ |
+| `ambaar/app.py`                                                              | main window, sidebar, queue                      |
+| `ambaar/engine.py`                                                           | settings, jobs, worker threads, error diagnosis  |
+| `ambaar/updater.py`                                                          | update, verify, roll back; also a CLI            |
+| `ambaar/bootstrap.py`                                                        | engine path resolution for packaged builds       |
+| `ambaar/branding.py`                                                         | window icon and Windows taskbar identity         |
+| `ambaar/theme.py`                                                            | every colour, font, and metric in the app        |
+| `ambaar/widgets.py`                                                          | painted marks, row delegate, empty state         |
+| `ambaar/store.py`                                                            | SQLite queue and history                         |
+| `ambaar/links.py`                                                            | link keys, duplicate detection, clipboard filter |
+| `ambaar/space.py`                                                            | size estimates and the disk-space check          |
+| `ambaar/formatdialog.py`, `itemsdialog.py`, `logdialog.py`, `historypage.py` | per-item options, playlist picker, log, history  |
+| `ambaar/thumbs.py`                                                           | thumbnail cache                                  |
+| `ambaar/ffmpeg.py`                                                           | ffmpeg discovery and download                    |
+| `ambaar/paths.py`                                                            | per-user data locations                          |
 
 State lives in the platform data directory — `%APPDATA%\ambaar` on Windows,
 `~/Library/Application Support/ambaar` on macOS, `~/.local/share/ambaar` on

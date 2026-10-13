@@ -16,15 +16,48 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import (
-    QEvent, QObject, QRunnable, QSize, Qt, QThreadPool, QTimer, QUrl, Signal, Slot,
+    QEvent,
+    QObject,
+    QRunnable,
+    QSize,
+    Qt,
+    QThreadPool,
+    QTimer,
+    QUrl,
+    Signal,
+    Slot,
 )
-from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QIcon, QKeySequence
+from PySide6.QtGui import (
+    QAction,
+    QDesktopServices,
+    QGuiApplication,
+    QIcon,
+    QKeySequence,
+)
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QCheckBox, QFileDialog, QFormLayout, QFrame,
-    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
-    QMenu, QMessageBox, QPushButton, QScrollArea, QStackedWidget, QStatusBar,
-    QSystemTrayIcon, QTextEdit,
-    QVBoxLayout, QWidget,
+    QApplication,
+    QButtonGroup,
+    QCheckBox,
+    QFileDialog,
+    QFormLayout,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QStackedWidget,
+    QStatusBar,
+    QSystemTrayIcon,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
 
 from . import branding
@@ -40,10 +73,28 @@ from .logdialog import LogDialog
 from .store import QueueStore, discard_incomplete
 from .engine import QUALITY_MAP, DownloadManager, Job, Settings
 from .paths import data_dir
-from .widgets import (ROW_HEIGHT, ComboBox, EmptyState, EngineBadge, JobDelegate,
-                      OfferBar, SpinBox, key_action)
+from .widgets import (
+    ROW_HEIGHT,
+    ComboBox,
+    EmptyState,
+    EngineBadge,
+    JobDelegate,
+    OfferBar,
+    SpinBox,
+    key_action,
+)
 
-BROWSERS = ["", "chrome", "firefox", "edge", "safari", "brave", "chromium", "opera", "vivaldi"]
+BROWSERS = [
+    "",
+    "chrome",
+    "firefox",
+    "edge",
+    "safari",
+    "brave",
+    "chromium",
+    "opera",
+    "vivaldi",
+]
 # Busy states come from the engine so the UI and the workers cannot disagree.
 ACTIVE = engine.BUSY | {"Cancelling"}
 SECTIONS = ["Queue", "History", "Settings", "Engine", "Activity"]
@@ -52,6 +103,7 @@ SECTIONS = ["Queue", "History", "Settings", "Engine", "Activity"]
 # --------------------------------------------------------------------------- #
 # Background tasks
 # --------------------------------------------------------------------------- #
+
 
 class TaskSignals(QObject):
     progress = Signal(str)
@@ -71,7 +123,9 @@ class UpdateTask(QRunnable):
         state = updater.UpdaterState.load()
         state.channel = self.channel  # type: ignore[assignment]
         outcome = updater.run_update(
-            state, force=self.force, verify_only=self.verify_only,
+            state,
+            force=self.force,
+            verify_only=self.verify_only,
             on_progress=self.signals.progress.emit,
         )
         self.signals.done.emit(outcome)
@@ -98,6 +152,7 @@ class ToolTask(QRunnable):
 # Layout helpers
 # --------------------------------------------------------------------------- #
 
+
 def row_tag(job: Job) -> str:
     """The bracketed tag on a row: its format choice and any folder override."""
     bits = [engine.describe_format(job.fmt)]
@@ -121,7 +176,7 @@ def _parse_speed(text: str) -> float:
     """
     if not text or text == "--":
         return 0.0
-    units = {"B": 1, "KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3, "TB": 1024 ** 4}
+    units = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
     parts = text.replace("/s", "").strip().split()
     if len(parts) != 2:
         return 0.0
@@ -161,6 +216,7 @@ def row(*widgets, spacing: int = 8, stretch: int = -1) -> QWidget:
 # --------------------------------------------------------------------------- #
 # Main window
 # --------------------------------------------------------------------------- #
+
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -236,7 +292,9 @@ class MainWindow(QMainWindow):
             a = QAction(text, self)
             a.triggered.connect(
                 lambda _=False, f=path_fn: QDesktopServices.openUrl(
-                    QUrl.fromLocalFile(str(f()))))
+                    QUrl.fromLocalFile(str(f()))
+                )
+            )
             m2.addAction(a)
 
     def _build_ui(self) -> None:
@@ -311,7 +369,8 @@ class MainWindow(QMainWindow):
 
         self.badge = EngineBadge()
         self.badge.clicked.connect(
-            lambda: self._show_page(SECTIONS.index("Engine"), sync_nav=True))
+            lambda: self._show_page(SECTIONS.index("Engine"), sync_nav=True)
+        )
         holder = QWidget()
         hl = QVBoxLayout(holder)
         hl.setContentsMargins(14, 0, 14, 0)
@@ -333,25 +392,52 @@ class MainWindow(QMainWindow):
         self.btn_start = QPushButton("Download all")
         self.btn_pause_all = QPushButton("Pause all")
         self.btn_resume_all = QPushButton("Resume all")
-        self.btn_cancel = QPushButton("Cancel")
-        self.btn_retry = QPushButton("Retry")
-        self.btn_clear = QPushButton("Clear finished")
-        self.btn_clear_all = QPushButton("Clear queue")
-        for b, fn in ((self.btn_start, self.start_all_ready),
-                      (self.btn_pause_all, self.pause_all),
-                      (self.btn_resume_all, self.resume_all),
-                      (self.btn_cancel, self.cancel_selected),
-                      (self.btn_retry, self.retry_selected),
-                      (self.btn_clear, self.clear_finished),
-                      (self.btn_clear_all, self.clear_queue)):
+        self.btn_more = QPushButton("More")
+        for b, fn in (
+            (self.btn_start, self.start_all_ready),
+            (self.btn_pause_all, self.pause_all),
+            (self.btn_resume_all, self.resume_all),
+        ):
+            b.clicked.connect(fn)
+        for b in (
+            self.btn_start,
+            self.btn_pause_all,
+            self.btn_resume_all,
+            self.btn_more,
+        ):
             b.setProperty("variant", "ghost")
             b.setCursor(Qt.PointingHandCursor)
-            b.clicked.connect(fn)
+            # Never let the layout squeeze a button below its text. At the
+            # minimum window width seven buttons did not fit and each one was
+            # clipped mid-word.
+            b.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             lay.addWidget(b)
         self.btn_start.setProperty("variant", "primary")
-        self.queue_actions = [self.btn_start, self.btn_pause_all, self.btn_resume_all,
-                              self.btn_cancel, self.btn_retry,
-                              self.btn_clear, self.btn_clear_all]
+
+        # What acts on the selection, or on the whole list, lives behind More.
+        # Per-row actions are on the rows themselves.
+        more = QMenu(self.btn_more)
+        for text, fn in (
+            ("Cancel selected", self.cancel_selected),
+            ("Retry selected", self.retry_selected),
+            (None, None),
+            ("Clear finished", self.clear_finished),
+            ("Clear queue", self.clear_queue),
+        ):
+            if text is None:
+                more.addSeparator()
+            else:
+                more.addAction(text, fn)
+        self.btn_more.setMenu(more)
+        self.btn_more.setStyleSheet(
+            "QPushButton::menu-indicator { image: none; width: 0; }"
+        )
+        self.queue_actions = [
+            self.btn_start,
+            self.btn_pause_all,
+            self.btn_resume_all,
+            self.btn_more,
+        ]
         return head
 
     def _url_bar(self) -> QWidget:
@@ -364,7 +450,15 @@ class MainWindow(QMainWindow):
         self.url_input.setObjectName("UrlBar")
         self.url_input.setPlaceholderText("Paste a video or playlist link")
         self.url_input.setClearButtonEnabled(True)
+        # A link is staged the moment it arrives: pasted into the box, entered,
+        # or left behind when focus moves on. Making the user also find and
+        # press a button just to start the check was the original complaint.
+        self._url_len = 0
+        self.url_input.textEdited.connect(self._on_url_edited)
         self.url_input.returnPressed.connect(self.add_from_input)
+        self.url_input.editingFinished.connect(
+            lambda: self.add_from_input(explicit=False)
+        )
         lay.addWidget(self.url_input, 1)
 
         paste = QPushButton("Paste")
@@ -373,12 +467,16 @@ class MainWindow(QMainWindow):
         paste.clicked.connect(self.paste_and_add)
         lay.addWidget(paste)
 
-        add = QPushButton("Download")
+        # "Add", not "Download": this checks the link and puts it in the list.
+        # Downloading starts from the row's own button.
+        add = QPushButton("Add")
         add.setProperty("variant", "primary")
         add.setCursor(Qt.PointingHandCursor)
         add.setDefault(True)
-        add.clicked.connect(self.add_from_input)
+        add.clicked.connect(lambda: self.add_from_input())
         lay.addWidget(add)
+        for b in (paste, add):
+            b.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         return wrap
 
     # -- pages --------------------------------------------------------------- #
@@ -514,7 +612,9 @@ class MainWindow(QMainWindow):
         self.cookies.setCurrentText(self.settings.cookies_from_browser)
         self.cookies.currentTextChanged.connect(self._save)
         f4.addRow("Cookies from", row(self.cookies))
-        hint = label("Needed for age-restricted, private, or members-only videos.", "hint")
+        hint = label(
+            "Needed for age-restricted, private, or members-only videos.", "hint"
+        )
         hint.setWordWrap(True)
         f4.addRow("", hint)
 
@@ -555,8 +655,11 @@ class MainWindow(QMainWindow):
         self.retries.setValue(self.settings.auto_retry)
         self.retries.valueChanged.connect(self._save)
         f4.addRow("Automatic retries", row(self.retries))
-        hint2 = label("Network failures are retried after 15 s, 1 min, then 5 min. "
-                      "0 turns it off.", "hint")
+        hint2 = label(
+            "Network failures are retried after 15 s, 1 min, then 5 min. "
+            "0 turns it off.",
+            "hint",
+        )
         hint2.setWordWrap(True)
         f4.addRow("", hint2)
 
@@ -612,7 +715,9 @@ class MainWindow(QMainWindow):
             "Verification resolves a real media URL and issues a ranged request "
             "against it. A 403 there means signature deciphering is broken, which "
             "a version number alone would never reveal. If an update regresses, "
-            "the previous working version is restored automatically.", "hint")
+            "the previous working version is restored automatically.",
+            "hint",
+        )
         explain.setWordWrap(True)
         col.addWidget(explain)
         col.addWidget(rule())
@@ -632,7 +737,9 @@ class MainWindow(QMainWindow):
 
         ff_hint = label(
             "Required for anything above 360p and for audio extraction. Without "
-            "it, downloads quietly fall back to a low-quality single stream.", "hint")
+            "it, downloads quietly fall back to a low-quality single stream.",
+            "hint",
+        )
         ff_hint.setWordWrap(True)
         col.addWidget(ff_hint)
         col.addWidget(rule())
@@ -654,7 +761,9 @@ class MainWindow(QMainWindow):
             "YouTube obfuscates its format URLs behind a JavaScript challenge. "
             "yt-dlp needs a runtime to solve it; without one it falls back to "
             "weaker extraction and some formats never appear. Downloads still "
-            "succeed, they are just worse.", "hint")
+            "succeed, they are just worse.",
+            "hint",
+        )
         js_hint.setWordWrap(True)
         col.addWidget(js_hint)
 
@@ -729,8 +838,9 @@ class MainWindow(QMainWindow):
     # -- settings ------------------------------------------------------------ #
 
     def _pick_dir(self) -> None:
-        d = QFileDialog.getExistingDirectory(self, "Choose download folder",
-                                             self.out_dir.text())
+        d = QFileDialog.getExistingDirectory(
+            self, "Choose download folder", self.out_dir.text()
+        )
         if d:
             self.out_dir.setText(d)
             self._save()
@@ -781,15 +891,36 @@ class MainWindow(QMainWindow):
             self.url_input.setText(text)
         self.add_from_input()
 
-    def add_from_input(self) -> None:
+    @staticmethod
+    def _links_in(raw: str) -> list[str]:
+        return [u for u in raw.replace(",", " ").split() if u.startswith("http")]
+
+    def _on_url_edited(self, text: str) -> None:
+        """Stage at once when a link is pasted; typing waits for Enter or focus-out."""
+        pasted = len(text) - self._url_len > 1
+        self._url_len = len(text)
+        if pasted and self._links_in(text):
+            QTimer.singleShot(0, lambda: self.add_from_input(explicit=False))
+
+    def add_from_input(self, explicit: bool = True) -> None:
+        """
+        Check what is in the link bar and add each link to the queue.
+
+        `explicit` is true for Enter and the Add button, where the user wants to
+        hear that text is not a link. On focus-out and paste it is false, and a
+        box holding something that is not a link is left alone rather than
+        complained about every time focus moves.
+        """
         raw = self.url_input.text().strip()
         if not raw:
             return
-        urls = [u for u in raw.replace(",", " ").split() if u.startswith("http")]
+        urls = self._links_in(raw)
         if not urls:
-            self._status("That does not look like a link.")
+            if explicit:
+                self._status("That does not look like a link.")
             return
         self.url_input.clear()
+        self._url_len = 0
         for url in urls:
             if self._confirm_duplicate(url):
                 self.add_job(url)
@@ -801,15 +932,22 @@ class MainWindow(QMainWindow):
         """Why this link is a repeat, or "" when it is new."""
         twin = links.find_duplicate(url, self.jobs.values())
         if twin is not None:
-            return f"It is already in the queue as \u201c{twin.title or twin.url}\u201d."
+            return (
+                f"It is already in the queue as \u201c{twin.title or twin.url}\u201d."
+            )
         if self.settings.archive_enabled and links.archive_has(
-                url, Path.home() / ".ambaar" / "archive.txt"):
-            return ("Your download archive lists it as downloaded, so the engine "
-                    "will skip it.")
+            url, Path.home() / ".ambaar" / "archive.txt"
+        ):
+            return (
+                "Your download archive lists it as downloaded, so the engine "
+                "will skip it."
+            )
         past = self.store.history_find(url)
         if past:
-            return (f"You downloaded \u201c{past['title']}\u201d on "
-                    f"{when(past['finished_at']).split('  ')[0]}.")
+            return (
+                f"You downloaded \u201c{past['title']}\u201d on "
+                f"{when(past['finished_at']).split('  ')[0]}."
+            )
         return ""
 
     def _confirm_duplicate(self, url: str) -> bool:
@@ -817,8 +955,12 @@ class MainWindow(QMainWindow):
         if not reason:
             return True
         reply = QMessageBox.question(
-            self, "Already added", f"{reason}\n\nAdd it again?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            self,
+            "Already added",
+            f"{reason}\n\nAdd it again?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
         return reply == QMessageBox.Yes
 
     def _on_clipboard(self) -> None:
@@ -934,9 +1076,12 @@ class MainWindow(QMainWindow):
         job = self.jobs.get(job_id)
         if job is None or job.status != engine.READY:
             return
-        avail = space.available_formats(job.sizes) if not job.is_playlist() else ([], [])
-        dlg = FormatDialog(job.title or job.url, job.fmt, self.settings, avail,
-                           job.dest, self)
+        avail = (
+            space.available_formats(job.sizes) if not job.is_playlist() else ([], [])
+        )
+        dlg = FormatDialog(
+            job.title or job.url, job.fmt, self.settings, avail, job.dest, self
+        )
         if dlg.exec() != FormatDialog.Accepted:
             return
         job.fmt, job.dest = dlg.choice, dlg.dest
@@ -949,7 +1094,9 @@ class MainWindow(QMainWindow):
             return
         entries = engine.unpack_entries(job.entries)
         if not entries:
-            self._status("This playlist's contents were not saved; remove it and add it again")
+            self._status(
+                "This playlist's contents were not saved; remove it and add it again"
+            )
             return
         dlg = ItemsDialog(job.title, entries, engine.selected_positions(job), self)
         if dlg.exec() != ItemsDialog.Accepted:
@@ -1018,8 +1165,9 @@ class MainWindow(QMainWindow):
     def resume_all(self) -> None:
         paused = [jid for jid, j in self.jobs.items() if j.status == engine.PAUSED]
         self._start_many(paused)
-        self._status(f"Resuming {len(paused)} download(s)" if paused
-                     else "Nothing is paused.")
+        self._status(
+            f"Resuming {len(paused)} download(s)" if paused else "Nothing is paused."
+        )
 
     def _update_totals(self) -> None:
         """
@@ -1028,8 +1176,11 @@ class MainWindow(QMainWindow):
         Per-row numbers answer "how is this one doing"; this answers "can I walk
         away yet", which is the question a long queue actually raises.
         """
-        running = [j for j in self.jobs.values()
-                   if j.status in (engine.DOWNLOADING, engine.PROCESSING)]
+        running = [
+            j
+            for j in self.jobs.values()
+            if j.status in (engine.DOWNLOADING, engine.PROCESSING)
+        ]
         ready = sum(1 for j in self.jobs.values() if j.status == engine.READY)
         paused = sum(1 for j in self.jobs.values() if j.status == engine.PAUSED)
         done = sum(1 for j in self.jobs.values() if j.status == engine.DONE)
@@ -1081,8 +1232,9 @@ class MainWindow(QMainWindow):
             tray.showMessage(title, body, QSystemTrayIcon.Information, 6000)
 
     def start_all_ready(self) -> None:
-        self._start_many([jid for jid, j in self.jobs.items()
-                          if j.status == engine.READY])
+        self._start_many(
+            [jid for jid, j in self.jobs.items() if j.status == engine.READY]
+        )
 
     def _start_many(self, job_ids: list[str]) -> None:
         """Start a batch behind one space question rather than one per row."""
@@ -1112,16 +1264,21 @@ class MainWindow(QMainWindow):
             if not space.shortfall(needed, free):
                 continue
             if needed:
-                detail = (f"These downloads need about {engine.human_bytes(needed)} "
-                          f"and {engine.human_bytes(free)} is free.")
+                detail = (
+                    f"These downloads need about {engine.human_bytes(needed)} "
+                    f"and {engine.human_bytes(free)} is free."
+                )
             else:
                 detail = f"Only {engine.human_bytes(free)} is free."
             reply = QMessageBox.warning(
-                self, "Low disk space",
+                self,
+                "Low disk space",
                 f"{detail}\n\nThe drive holding {folder} may fill "
                 "up mid-download. Partial files are kept, so a stopped download "
                 "resumes once there is room.\n\nDownload anyway?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
             if reply != QMessageBox.Yes:
                 return False
         return True
@@ -1132,13 +1289,23 @@ class MainWindow(QMainWindow):
         selected, duration = None, job.duration
         if job.is_playlist():
             selected, _, duration = engine.selection_summary(job)
-        return {"url": job.url, "title": job.title, "status": job.status,
-                "kind": job.kind, "item_count": job.item_count,
-                "selected": selected,
-                "duration": duration, "uploader": job.uploader,
-                "thumb": job.thumb, "fmt_label": row_tag(job),
-                "percent": job.percent, "speed": job.speed, "eta": job.eta,
-                "size": job.size, "error": job.error}
+        return {
+            "url": job.url,
+            "title": job.title,
+            "status": job.status,
+            "kind": job.kind,
+            "item_count": job.item_count,
+            "selected": selected,
+            "duration": duration,
+            "uploader": job.uploader,
+            "thumb": job.thumb,
+            "fmt_label": row_tag(job),
+            "percent": job.percent,
+            "speed": job.speed,
+            "eta": job.eta,
+            "size": job.size,
+            "error": job.error,
+        }
 
     def _refresh(self, job_id: str) -> None:
         item = self.items.get(job_id)
@@ -1190,7 +1357,9 @@ class MainWindow(QMainWindow):
         self._refresh(job_id)
 
     @Slot(str, float, str, str, str)
-    def _on_progress(self, job_id: str, pct: float, speed: str, eta: str, size: str) -> None:
+    def _on_progress(
+        self, job_id: str, pct: float, speed: str, eta: str, size: str
+    ) -> None:
         job = self.jobs[job_id]
         job.percent, job.speed, job.eta, job.size = pct, speed, eta, size
         self._refresh(job_id)
@@ -1244,7 +1413,9 @@ class MainWindow(QMainWindow):
             return False
         job.attempts += 1
         delay = engine.retry_delay(job.attempts)
-        reason = error.strip().splitlines()[0][:80] if error.strip() else "network error"
+        reason = (
+            error.strip().splitlines()[0][:80] if error.strip() else "network error"
+        )
         job.status = engine.QUEUED
         job.error = f"Retrying in {delay} s ({job.attempts} of {limit}): {reason}"
         job.speed = job.eta = ""
@@ -1278,7 +1449,9 @@ class MainWindow(QMainWindow):
         self._persist(job_id)
         self._update_totals()
         self.manager.release(job_id)
-        self._status(f"Paused at {job.percent:.0f}% -- Resume picks up where it stopped")
+        self._status(
+            f"Paused at {job.percent:.0f}% -- Resume picks up where it stopped"
+        )
 
     @Slot(str)
     def _on_cancelled(self, job_id: str) -> None:
@@ -1294,8 +1467,9 @@ class MainWindow(QMainWindow):
 
     def _on_rows_moved(self, *_args) -> None:
         """Rebuild job order from the list after a drag, and save it."""
-        order = [self.queue.item(r).data(Qt.UserRole + 1)
-                 for r in range(self.queue.count())]
+        order = [
+            self.queue.item(r).data(Qt.UserRole + 1) for r in range(self.queue.count())
+        ]
         self.jobs = {jid: self.jobs[jid] for jid in order if jid in self.jobs}
         # Rows already waiting for a download slot follow the new order too, so a
         # drag changes what runs next and not only what Download all starts.
@@ -1306,8 +1480,11 @@ class MainWindow(QMainWindow):
     def _redownload(self, job_id: str) -> None:
         """Fetch a finished item again, replacing the file."""
         job = self.jobs.get(job_id)
-        if job is None or job.status not in (engine.DONE, engine.FAILED,
-                                             engine.CANCELLED):
+        if job is None or job.status not in (
+            engine.DONE,
+            engine.FAILED,
+            engine.CANCELLED,
+        ):
             return
         job.redo, job.attempts = True, 0
         job.status, job.percent, job.error, job.filepath = engine.READY, 0.0, "", ""
@@ -1368,9 +1545,13 @@ class MainWindow(QMainWindow):
 
     def retry_selected(self) -> None:
         """Restart in place rather than adding a second row for the same link."""
-        self._start_many([jid for jid in self._selected_ids()
-                          if self.jobs.get(jid)
-                          and self.jobs[jid].status in engine.STARTABLE])
+        self._start_many(
+            [
+                jid
+                for jid in self._selected_ids()
+                if self.jobs.get(jid) and self.jobs[jid].status in engine.STARTABLE
+            ]
+        )
 
     def clear_finished(self) -> None:
         self._remove(set(engine.TERMINAL))
@@ -1380,11 +1561,14 @@ class MainWindow(QMainWindow):
         active = [j for j in self.jobs.values() if j.status in ACTIVE]
         if active:
             reply = QMessageBox.question(
-                self, "Clear the queue",
+                self,
+                "Clear the queue",
                 f"{len(active)} job(s) are still running. Cancel them and clear "
                 "the list?\n\nPartial files are kept, so adding a link again "
                 "resumes rather than starting over.",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
             if reply != QMessageBox.Yes:
                 return
         self.manager.cancel_all()
@@ -1453,7 +1637,8 @@ class MainWindow(QMainWindow):
                 label = "Pause (keeps the partial file)"
             act = menu.addAction(label)
             act.triggered.connect(
-                lambda _=False, a=action, j=job.job_id: self._on_row_action(j, a))
+                lambda _=False, a=action, j=job.job_id: self._on_row_action(j, a)
+            )
 
         if job.status == engine.DONE and not job.is_playlist():
             a_play = menu.addAction("Play")
@@ -1472,7 +1657,9 @@ class MainWindow(QMainWindow):
 
         if job.error:
             a_err = menu.addAction("Copy error")
-            a_err.triggered.connect(lambda: QGuiApplication.clipboard().setText(job.error))
+            a_err.triggered.connect(
+                lambda: QGuiApplication.clipboard().setText(job.error)
+            )
 
         if job.status not in ACTIVE:
             menu.addSeparator()
@@ -1523,8 +1710,9 @@ class MainWindow(QMainWindow):
         self.badge.set_state("busy", self.lbl_version.text(), "checking")
         self._status("Checking the engine")
 
-        task = UpdateTask(force=force, verify_only=verify_only,
-                          channel=self.channel.currentText())
+        task = UpdateTask(
+            force=force, verify_only=verify_only, channel=self.channel.currentText()
+        )
         task.signals.progress.connect(self._append_update_log)
         task.signals.done.connect(self._on_update_done)
         self.tasks.start(task)
@@ -1539,15 +1727,19 @@ class MainWindow(QMainWindow):
 
         if outcome.action == "rolled-back":
             QMessageBox.warning(
-                self, "Update rolled back",
+                self,
+                "Update rolled back",
                 f"{outcome.message}\n\nThe previous working version is still in "
-                "place, so downloads keep working. The next check tries again.")
+                "place, so downloads keep working. The next check tries again.",
+            )
         elif outcome.action == "blocked":
             self._python_dialog(outcome.message)
         elif outcome.action == "updated" and outcome.from_version:
             QMessageBox.information(
-                self, "Engine updated",
-                f"{outcome.message}\n\nRestart Ambaar to load it.")
+                self,
+                "Engine updated",
+                f"{outcome.message}\n\nRestart Ambaar to load it.",
+            )
 
     def _refresh_engine(self) -> None:
         state = updater.UpdaterState.load()
@@ -1587,8 +1779,10 @@ class MainWindow(QMainWindow):
             self.lbl_ffmpeg.setProperty("state", "ok")
             self.btn_ffmpeg.setText("Reinstall ffmpeg")
         else:
-            self.lbl_ffmpeg.setText("not found. Downloads above 360p will fall "
-                                    "back to a low-quality single stream.")
+            self.lbl_ffmpeg.setText(
+                "not found. Downloads above 360p will fall "
+                "back to a low-quality single stream."
+            )
             self.lbl_ffmpeg.setProperty("state", "bad")
             self.btn_ffmpeg.setText("Install ffmpeg")
         self.lbl_ffmpeg.setStyle(self.lbl_ffmpeg.style())
@@ -1596,9 +1790,11 @@ class MainWindow(QMainWindow):
     def _install_ffmpeg(self) -> None:
         if not ffmpeg_tool.can_fetch():
             QMessageBox.information(
-                self, "Install ffmpeg",
+                self,
+                "Install ffmpeg",
                 "No automatic download is available for this platform.\n\n"
-                f"Install it with:\n\n    {ffmpeg_tool.install_instructions()}")
+                f"Install it with:\n\n    {ffmpeg_tool.install_instructions()}",
+            )
             return
         self.btn_ffmpeg.setEnabled(False)
         self._show_page(2, sync_nav=True)
@@ -1610,9 +1806,11 @@ class MainWindow(QMainWindow):
     def _install_deno(self) -> None:
         if not jsruntime.can_fetch():
             QMessageBox.information(
-                self, "Install a JavaScript runtime",
+                self,
+                "Install a JavaScript runtime",
                 "No automatic download is available for this platform.\n\n"
-                f"Install it with:\n\n    {jsruntime.install_instructions()}")
+                f"Install it with:\n\n    {jsruntime.install_instructions()}",
+            )
             return
         self.btn_deno.setEnabled(False)
         self._show_page(2, sync_nav=True)
@@ -1642,7 +1840,8 @@ class MainWindow(QMainWindow):
         else:
             self.lbl_deno.setText(
                 "not found. yt-dlp cannot solve YouTube's nsig challenge without "
-                "one, so some higher-quality formats will be missing.")
+                "one, so some higher-quality formats will be missing."
+            )
             self.lbl_deno.setProperty("state", "warn")
             self.btn_deno.setText("Install runtime")
         self.lbl_deno.setStyle(self.lbl_deno.style())
@@ -1656,46 +1855,58 @@ class MainWindow(QMainWindow):
             return
         if not ffmpeg_tool.available():
             reply = QMessageBox.question(
-                self, "ffmpeg is required",
+                self,
+                "ffmpeg is required",
                 "ffmpeg was not found.\n\nYouTube serves video and audio as "
                 "separate streams above 360p, so without it every download "
                 "quietly falls back to a low-quality single stream.\n\n"
                 "Download and install it now?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
             if reply == QMessageBox.Yes:
                 self._install_ffmpeg()
                 return
 
         if not jsruntime.available() and jsruntime.can_fetch():
             reply = QMessageBox.question(
-                self, "JavaScript runtime recommended",
+                self,
+                "JavaScript runtime recommended",
                 "No JavaScript runtime was found.\n\nYouTube hides its format "
                 "URLs behind a JavaScript challenge. Without a runtime, some "
                 "higher-quality formats will silently never appear.\n\n"
                 "Download Deno now? It is about 40 MB.",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
             if reply == QMessageBox.Yes:
                 self._install_deno()
 
     def _python_dialog(self, problem: str) -> None:
         need = ".".join(str(x) for x in updater.MIN_PYTHON)
         if sys.platform == "win32":
-            steps = (f"    rmdir /s /q .venv\n"
-                     f"    py -{need} -m venv .venv\n"
-                     f"    .venv\\Scripts\\activate\n"
-                     f"    pip install -r requirements.txt\n\n"
-                     f"In Git Bash:  source .venv/Scripts/activate\n"
-                     f"Open a new terminal first. An installer's PATH changes "
-                     f"do not reach a shell that was already running.")
+            steps = (
+                f"    rmdir /s /q .venv\n"
+                f"    py -{need} -m venv .venv\n"
+                f"    .venv\\Scripts\\activate\n"
+                f"    pip install -r requirements.txt\n\n"
+                f"In Git Bash:  source .venv/Scripts/activate\n"
+                f"Open a new terminal first. An installer's PATH changes "
+                f"do not reach a shell that was already running."
+            )
         else:
-            steps = (f"    rm -rf .venv\n"
-                     f"    python{need} -m venv .venv\n"
-                     f"    source .venv/bin/activate\n"
-                     f"    pip install -r requirements.txt")
+            steps = (
+                f"    rm -rf .venv\n"
+                f"    python{need} -m venv .venv\n"
+                f"    source .venv/bin/activate\n"
+                f"    pip install -r requirements.txt"
+            )
         QMessageBox.critical(
-            self, "Unsupported Python version",
+            self,
+            "Unsupported Python version",
             f"{problem}\n\nRebuild the environment:\n\n{steps}\n\n"
-            f"Updating the engine will not help until this is fixed.")
+            f"Updating the engine will not help until this is fixed.",
+        )
 
     # -- misc ---------------------------------------------------------------- #
 
@@ -1719,10 +1930,13 @@ class MainWindow(QMainWindow):
         active = [j for j in self.jobs.values() if j.status in ACTIVE]
         if active:
             reply = QMessageBox.question(
-                self, "Downloads in progress",
+                self,
+                "Downloads in progress",
                 f"{len(active)} download(s) still running. Quit anyway?\n\n"
                 "Partial files are kept and resume if you add the link again.",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
             if reply != QMessageBox.Yes:
                 event.ignore()
                 return
@@ -1739,6 +1953,7 @@ class MainWindow(QMainWindow):
 
 # --------------------------------------------------------------------------- #
 
+
 def main() -> int:
     # Must precede QApplication and any window. Windows groups taskbar buttons
     # by AppUserModelID, so without this the shell treats the process as Python
@@ -1749,7 +1964,7 @@ def main() -> int:
     app.setApplicationName("Ambaar")
     app.setApplicationDisplayName("Ambaar")
     app.setOrganizationName("ambaar")
-    app.setDesktopFileName("ambaar")   # Linux: matches the .desktop entry
+    app.setDesktopFileName("ambaar")  # Linux: matches the .desktop entry
     # Fusion gives the stylesheet a predictable base on every platform; the
     # native styles ignore several of the properties used here.
     app.setStyle("Fusion")

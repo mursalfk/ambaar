@@ -11,12 +11,21 @@ inherit colour from the palette for free.
 
 from __future__ import annotations
 
+import math
+
 from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import (QColor, QFontMetrics, QPainter, QPainterPath, QPen,
-                           QPixmap)
+from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSpinBox, QStyle,
-    QStyledItemDelegate, QWidget,
+    QComboBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSpinBox,
+    QStyle,
+    QStyledItemDelegate,
+    QToolTip,
+    QWidget,
 )
 
 from . import engine, theme
@@ -32,8 +41,8 @@ THUMB_W = 96
 THUMB_H = 54
 THUMB_INSET = 14
 BUTTON_H = 28
-BUTTON_PAD_X = 14
-BUTTON_GAP = 8
+BUTTON_W = 34  # row buttons are icons: square-ish, no label to size by
+BUTTON_GAP = 6
 CHIP_H = 17
 
 STATE_COLOR = {
@@ -54,6 +63,7 @@ STATE_COLOR = {
 # --------------------------------------------------------------------------- #
 # Painted marks
 # --------------------------------------------------------------------------- #
+
 
 def paint_mark(p: QPainter, rect: QRectF, status: str, color: QColor) -> None:
     """
@@ -94,7 +104,9 @@ def paint_mark(p: QPainter, rect: QRectF, status: str, color: QColor) -> None:
         path.lineTo(QPointF(cx, y + h * 0.66))
         path.lineTo(QPointF(cx + w * 0.22, y + h * 0.4))
         p.drawPath(path)
-        p.drawLine(QPointF(x + w * 0.14, y + h * 0.88), QPointF(x + w * 0.86, y + h * 0.88))
+        p.drawLine(
+            QPointF(x + w * 0.14, y + h * 0.88), QPointF(x + w * 0.86, y + h * 0.88)
+        )
 
     elif status == "Processing":
         # gear-ish: square rotated inside a square
@@ -111,8 +123,13 @@ def paint_mark(p: QPainter, rect: QRectF, status: str, color: QColor) -> None:
     p.restore()
 
 
-def paint_chevron(p: QPainter, rect: QRectF, color: QColor,
-                  direction: str = "down", width: float = 1.3) -> None:
+def paint_chevron(
+    p: QPainter,
+    rect: QRectF,
+    color: QColor,
+    direction: str = "down",
+    width: float = 1.3,
+) -> None:
     """Two-segment chevron. Replaces the glyph a QComboBox would otherwise draw."""
     p.save()
     p.setRenderHint(QPainter.Antialiasing)
@@ -139,6 +156,7 @@ def paint_stepper(p: QPainter, up: QRectF, down: QRectF, color: QColor) -> None:
 # --------------------------------------------------------------------------- #
 # Controls with painted affordances
 # --------------------------------------------------------------------------- #
+
 
 class ComboBox(QComboBox):
     """QComboBox whose drop indicator is a painted chevron."""
@@ -188,6 +206,127 @@ class SpinBox(QSpinBox):
 # Queue row delegate
 # --------------------------------------------------------------------------- #
 
+# What each row icon says when hovered. Icons carry no text, so these are the
+# only labels a user gets; they also name the action in the right-click menu.
+TOOLTIPS = {
+    "download": "Download",
+    "pause": "Pause",
+    "resume": "Resume",
+    "cancel": "Cancel",
+    "retry": "Retry",
+    "remove": "Remove from list",
+    "folder": "Open folder",
+    "items": "Choose playlist items",
+    "format": "Format and folder",
+}
+
+
+def paint_icon(p: QPainter, action: str, rect: QRect, color: QColor) -> None:
+    """
+    Draw a row button's icon.
+
+    Everything is drawn from lines and rectangles rather than typed as glyphs,
+    for the same reason the status marks are: a glyph depends on the user's
+    fonts and a painted path does not. Square caps and mitred joins keep the
+    set consistent with the app's zero-radius corners.
+    """
+    s = 7.0
+    cx, cy = rect.center().x() + 0.5, rect.center().y() + 0.5
+    P = QPointF
+
+    p.save()
+    p.setRenderHint(QPainter.Antialiasing)
+    pen = QPen(color, 1.6)
+    pen.setCapStyle(Qt.SquareCap)
+    pen.setJoinStyle(Qt.MiterJoin)
+    p.setPen(pen)
+    p.setBrush(Qt.NoBrush)
+
+    def line(*pts):
+        for a, b in zip(pts, pts[1:]):
+            p.drawLine(a, b)
+
+    if action == "download":
+        line(P(cx, cy - s), P(cx, cy + 2.5))
+        line(P(cx - 4.5, cy - 1.5), P(cx, cy + 3), P(cx + 4.5, cy - 1.5))
+        line(
+            P(cx - s, cy + 2.5),
+            P(cx - s, cy + s),
+            P(cx + s, cy + s),
+            P(cx + s, cy + 2.5),
+        )
+    elif action == "pause":
+        p.setPen(Qt.NoPen)
+        p.setBrush(color)
+        p.drawRect(QRectF(cx - 4.5, cy - s, 3.2, 2 * s))
+        p.drawRect(QRectF(cx + 1.3, cy - s, 3.2, 2 * s))
+    elif action == "resume":
+        p.setPen(Qt.NoPen)
+        p.setBrush(color)
+        path = QPainterPath()
+        path.moveTo(cx - 3.5, cy - s)
+        path.lineTo(cx - 3.5, cy + s)
+        path.lineTo(cx + s - 0.5, cy)
+        path.closeSubpath()
+        p.drawPath(path)
+    elif action == "cancel":
+        d = s * 0.8
+        line(P(cx - d, cy - d), P(cx + d, cy + d))
+        line(P(cx - d, cy + d), P(cx + d, cy - d))
+    elif action == "retry":
+        r = 6.0
+        p.drawArc(QRectF(cx - r, cy - r, 2 * r, 2 * r), 40 * 16, 290 * 16)
+        # Arrowhead at the arc's end (330 degrees), pointing along its travel.
+        end = math.radians(330)
+        tip = P(cx + r * math.cos(end), cy - r * math.sin(end))
+        tx, ty = -math.sin(end), -math.cos(end)
+        for sign in (1, -1):
+            a = math.radians(145) * sign
+            hx = tx * math.cos(a) - ty * math.sin(a)
+            hy = tx * math.sin(a) + ty * math.cos(a)
+            p.drawLine(tip, P(tip.x() + hx * 4.5, tip.y() + hy * 4.5))
+    elif action == "folder":
+        poly = [
+            P(cx - s, cy - s * 0.6),
+            P(cx - s, cy + s * 0.75),
+            P(cx + s, cy + s * 0.75),
+            P(cx + s, cy - s * 0.35),
+            P(cx + 0.5, cy - s * 0.35),
+            P(cx - 1.5, cy - s * 0.6),
+        ]
+        line(*poly, poly[0])
+    elif action == "remove":
+        top = cy - s * 0.5
+        line(P(cx - s * 0.85, top), P(cx + s * 0.85, top))
+        line(
+            P(cx - 2.5, top),
+            P(cx - 2.5, cy - s * 0.9),
+            P(cx + 2.5, cy - s * 0.9),
+            P(cx + 2.5, top),
+        )
+        line(
+            P(cx - s * 0.6, top),
+            P(cx - s * 0.5, cy + s * 0.9),
+            P(cx + s * 0.5, cy + s * 0.9),
+            P(cx + s * 0.6, top),
+        )
+        line(P(cx - 1.8, top + 3), P(cx - 1.8, cy + s * 0.5))
+        line(P(cx + 1.8, top + 3), P(cx + 1.8, cy + s * 0.5))
+    elif action == "items":
+        p.setBrush(color)
+        for i in (-1, 0, 1):
+            y = cy + i * 4.5
+            p.drawRect(QRectF(cx - s, y - 1.2, 2.6, 2.4))
+            p.drawLine(P(cx - s + 5, y), P(cx + s, y))
+    elif action == "format":
+        p.drawLine(P(cx - s, cy - 3.2), P(cx + s, cy - 3.2))
+        p.drawLine(P(cx - s, cy + 3.2), P(cx + s, cy + 3.2))
+        p.setBrush(color)
+        p.drawRect(QRectF(cx - 3.5, cy - 5.2, 3, 4))
+        p.drawRect(QRectF(cx + 1.5, cy + 1.2, 3, 4))
+    p.restore()
+
+
 class JobDelegate(QStyledItemDelegate):
     """
     Paints one job as a row and handles its inline buttons.
@@ -207,7 +346,7 @@ class JobDelegate(QStyledItemDelegate):
     def __init__(self, view=None) -> None:
         super().__init__(view)
         self._view = view
-        self._hover: tuple[int, int] | None = None   # (row, button index)
+        self._hover: tuple[int, int] | None = None  # (row, button index)
         # Decoded thumbnails, keyed by path. paint() runs on every scroll frame;
         # re-decoding a JPEG each time would make scrolling stutter.
         self._pixmaps: dict[str, QPixmap] = {}
@@ -220,18 +359,26 @@ class JobDelegate(QStyledItemDelegate):
             return hit if not hit.isNull() else None
         pm = QPixmap(path)
         if not pm.isNull():
-            pm = pm.scaled(THUMB_W * 2, THUMB_H * 2, Qt.KeepAspectRatioByExpanding,
-                           Qt.SmoothTransformation)
+            pm = pm.scaled(
+                THUMB_W * 2,
+                THUMB_H * 2,
+                Qt.KeepAspectRatioByExpanding,
+                Qt.SmoothTransformation,
+            )
             pm.setDevicePixelRatio(2)
-        self._pixmaps[path] = pm          # cache the miss too, so it is tried once
+        self._pixmaps[path] = pm  # cache the miss too, so it is tried once
         return pm if not pm.isNull() else None
 
-    def _paint_thumbnail(self, p: QPainter, rect: QRect, job: dict,
-                         status: str, colour: QColor) -> QRect:
+    def _paint_thumbnail(
+        self, p: QPainter, rect: QRect, job: dict, status: str, colour: QColor
+    ) -> QRect:
         """Draw the picture, or a placeholder carrying the status mark."""
-        box = QRect(rect.left() + THUMB_INSET,
-                    rect.top() + (rect.height() - THUMB_H) // 2,
-                    THUMB_W, THUMB_H)
+        box = QRect(
+            rect.left() + THUMB_INSET,
+            rect.top() + (rect.height() - THUMB_H) // 2,
+            THUMB_W,
+            THUMB_H,
+        )
 
         pm = self._thumbnail(job.get("thumb") or "")
         if pm is not None:
@@ -239,14 +386,24 @@ class JobDelegate(QStyledItemDelegate):
             # both directions, so this trims rather than letterboxes.
             sx = max(0, (pm.width() / pm.devicePixelRatio() - THUMB_W) / 2)
             sy = max(0, (pm.height() / pm.devicePixelRatio() - THUMB_H) / 2)
-            p.drawPixmap(box, pm, QRectF(sx * pm.devicePixelRatio(),
-                                         sy * pm.devicePixelRatio(),
-                                         THUMB_W * pm.devicePixelRatio(),
-                                         THUMB_H * pm.devicePixelRatio()).toRect())
+            p.drawPixmap(
+                box,
+                pm,
+                QRectF(
+                    sx * pm.devicePixelRatio(),
+                    sy * pm.devicePixelRatio(),
+                    THUMB_W * pm.devicePixelRatio(),
+                    THUMB_H * pm.devicePixelRatio(),
+                ).toRect(),
+            )
         else:
             p.fillRect(box, theme.c("track"))
-            mark = QRectF(box.center().x() - MARK_SIZE / 2,
-                          box.center().y() - MARK_SIZE / 2, MARK_SIZE, MARK_SIZE)
+            mark = QRectF(
+                box.center().x() - MARK_SIZE / 2,
+                box.center().y() - MARK_SIZE / 2,
+                MARK_SIZE,
+                MARK_SIZE,
+            )
             paint_mark(p, mark, status, colour)
 
         p.setPen(QPen(theme.c("line_soft"), 1))
@@ -267,8 +424,12 @@ class JobDelegate(QStyledItemDelegate):
         """
         if status == engine.READY:
             extra = [("items", "Items", False)] if kind == engine.KIND_PLAYLIST else []
-            return [("download", "Download", True), *extra,
-                    ("format", "Options", False), ("remove", "Remove", False)]
+            return [
+                ("download", "Download", True),
+                *extra,
+                ("format", "Options", False),
+                ("remove", "Remove", False),
+            ]
         if status == engine.DOWNLOADING:
             return [("pause", "Pause", False), ("cancel", "Cancel", False)]
         if status == engine.PAUSED:
@@ -283,18 +444,18 @@ class JobDelegate(QStyledItemDelegate):
             return [("folder", "Open folder", False), ("remove", "Remove", False)]
         if status in (engine.FAILED, engine.CANCELLED):
             return [("retry", "Retry", True), ("remove", "Remove", False)]
-        return []   # Staged: nothing to press while it resolves
+        return []  # Staged: nothing to press while it resolves
 
     @classmethod
-    def button_rects(cls, rect: QRect, status: str,
-                     kind: str = "") -> list[tuple[str, str, bool, QRect]]:
+    def button_rects(
+        cls, rect: QRect, status: str, kind: str = ""
+    ) -> list[tuple[str, str, bool, QRect]]:
         """Lay buttons out right to left, vertically centred."""
         out = []
-        fm = QFontMetrics(theme.font(theme.SIZE["sm"], weight=600))
         x = rect.right() - ROW_PAD_X
         y = rect.top() + (rect.height() - BUTTON_H) // 2
         for action, label, primary in reversed(cls.buttons_for(status, kind)):
-            w = fm.horizontalAdvance(label) + BUTTON_PAD_X * 2
+            w = BUTTON_W
             x -= w
             out.insert(0, (action, label, primary, QRect(x, y, w, BUTTON_H)))
             x -= BUTTON_GAP
@@ -313,8 +474,11 @@ class JobDelegate(QStyledItemDelegate):
 
     def editorEvent(self, event, model, option, index) -> bool:
         etype = event.type()
-        if etype not in (QEvent.MouseMove, QEvent.MouseButtonRelease,
-                         QEvent.MouseButtonPress):
+        if etype not in (
+            QEvent.MouseMove,
+            QEvent.MouseButtonRelease,
+            QEvent.MouseButtonPress,
+        ):
             return False
 
         job = index.data(Qt.UserRole) or {}
@@ -348,23 +512,39 @@ class JobDelegate(QStyledItemDelegate):
 
     # -- painting ------------------------------------------------------------ #
 
-    def _paint_button(self, p: QPainter, rect: QRect, label: str,
-                      primary: bool, hovered: bool) -> None:
+    def _paint_button(
+        self, p: QPainter, rect: QRect, action: str, primary: bool, hovered: bool
+    ) -> None:
         if primary:
             bg = theme.c("accent_hi") if hovered else theme.c("accent")
             p.fillRect(rect, bg)
             p.setPen(QPen(bg, 1))
             p.drawRect(rect.adjusted(0, 0, -1, -1))
-            p.setPen(theme.c("on_accent"))
+            ink = theme.c("on_accent")
         else:
             if hovered:
                 p.fillRect(rect, theme.c("hover"))
             p.setPen(QPen(theme.c("text_faint") if hovered else theme.c("line"), 1))
             p.drawRect(rect.adjusted(0, 0, -1, -1))
-            p.setPen(theme.c("text") if hovered else theme.c("text_dim"))
+            ink = theme.c("text") if hovered else theme.c("text_dim")
+        paint_icon(p, action, rect, ink)
 
-        p.setFont(theme.font(theme.SIZE["sm"], weight=600))
-        p.drawText(rect, Qt.AlignCenter, label)
+    def helpEvent(self, event, view, option, index) -> bool:
+        """Name an icon when the pointer rests on it."""
+        if event.type() == QEvent.ToolTip:
+            job = index.data(Qt.UserRole) or {}
+            rects = self.button_rects(
+                option.rect, job.get("status", ""), job.get("kind", "")
+            )
+            for action, label, _primary, r in rects:
+                if r.contains(event.pos()):
+                    QToolTip.showText(
+                        event.globalPos(), TOOLTIPS.get(action, label), view
+                    )
+                    return True
+            QToolTip.hideText()
+            return False
+        return super().helpEvent(event, view, option, index)
 
     def _paint_kind_chip(self, p: QPainter, x: int, y: int, job: dict) -> int:
         """Draw the VIDEO / PLAYLIST tag. Returns the x to continue from."""
@@ -373,7 +553,9 @@ class JobDelegate(QStyledItemDelegate):
             return x
 
         label = "PLAYLIST" if kind == engine.KIND_PLAYLIST else "VIDEO"
-        colour = theme.c("accent") if kind == engine.KIND_PLAYLIST else theme.c("text_dim")
+        colour = (
+            theme.c("accent") if kind == engine.KIND_PLAYLIST else theme.c("text_dim")
+        )
 
         font = theme.font(theme.SIZE["xs"], mono=True, weight=600, tracking=10)
         fm = QFontMetrics(font)
@@ -410,9 +592,13 @@ class JobDelegate(QStyledItemDelegate):
             p.fillRect(rect, theme.c("ink"))
 
         if selected:
-            p.fillRect(QRect(rect.left(), rect.top(), 2, rect.height()), theme.c("accent"))
+            p.fillRect(
+                QRect(rect.left(), rect.top(), 2, rect.height()), theme.c("accent")
+            )
 
-        p.fillRect(QRect(rect.left(), rect.bottom(), rect.width(), 1), theme.c("line_soft"))
+        p.fillRect(
+            QRect(rect.left(), rect.bottom(), rect.width(), 1), theme.c("line_soft")
+        )
 
         base_status = status.split(" (")[0]
         state_colour = theme.c(STATE_COLOR.get(base_status, "text_faint"))
@@ -427,9 +613,11 @@ class JobDelegate(QStyledItemDelegate):
         fm_title = QFontMetrics(title_font)
         p.setFont(title_font)
         p.setPen(theme.c("text") if status != engine.FAILED else theme.c("text_dim"))
-        p.drawText(QRect(text_left, rect.top() + 11, text_w, fm_title.height()),
-                   Qt.AlignLeft | Qt.AlignVCenter,
-                   fm_title.elidedText(title, Qt.ElideRight, text_w))
+        p.drawText(
+            QRect(text_left, rect.top() + 11, text_w, fm_title.height()),
+            Qt.AlignLeft | Qt.AlignVCenter,
+            fm_title.elidedText(title, Qt.ElideRight, text_w),
+        )
 
         # line 2: kind chip, then what the link is
         chip_y = rect.top() + 36
@@ -444,8 +632,11 @@ class JobDelegate(QStyledItemDelegate):
         if job.get("kind") == engine.KIND_PLAYLIST and job.get("item_count"):
             picked = job.get("selected")
             total = job["item_count"]
-            bits.append(f"{picked} of {total} items" if picked not in (None, total)
-                        else f"{total} items")
+            bits.append(
+                f"{picked} of {total} items"
+                if picked not in (None, total)
+                else f"{total} items"
+            )
         dur = engine.human_duration(job.get("duration"))
         if dur:
             bits.append(dur)
@@ -456,17 +647,20 @@ class JobDelegate(QStyledItemDelegate):
         meta = "  ".join(bits) if bits else url
 
         meta_w = max(40, text_right - after_chip)
-        p.drawText(QRect(after_chip, chip_y, meta_w, CHIP_H),
-                   Qt.AlignLeft | Qt.AlignVCenter,
-                   fm_sub.elidedText(meta, Qt.ElideRight, meta_w))
+        p.drawText(
+            QRect(after_chip, chip_y, meta_w, CHIP_H),
+            Qt.AlignLeft | Qt.AlignVCenter,
+            fm_sub.elidedText(meta, Qt.ElideRight, meta_w),
+        )
 
         # line 3: status word, then live metrics or the error
         # A small mark leads the status word. Shape carries the state as well as
         # colour, so the row stays readable without relying on hue alone.
         line3_y = rect.top() + 58
         small = 11
-        paint_mark(p, QRectF(text_left, line3_y + 3, small, small),
-                   base_status, state_colour)
+        paint_mark(
+            p, QRectF(text_left, line3_y + 3, small, small), base_status, state_colour
+        )
 
         status_font = theme.font(theme.SIZE["xs"], mono=True, tracking=10, caps=True)
         fm_status = QFontMetrics(status_font)
@@ -474,49 +668,79 @@ class JobDelegate(QStyledItemDelegate):
         p.setPen(state_colour)
         status_x = text_left + small + 8
         status_w = fm_status.horizontalAdvance(status) + 14
-        p.drawText(QRect(status_x, line3_y, status_w, fm_status.height()),
-                   Qt.AlignLeft | Qt.AlignVCenter, status)
+        p.drawText(
+            QRect(status_x, line3_y, status_w, fm_status.height()),
+            Qt.AlignLeft | Qt.AlignVCenter,
+            status,
+        )
 
         detail_font = theme.font(theme.SIZE["sm"], mono=True)
         fm_detail = QFontMetrics(detail_font)
         p.setFont(detail_font)
         # A retry countdown is news, not a failure: warn colour, not red.
         waiting = status == engine.QUEUED and bool(error)
-        p.setPen(theme.c("warn") if waiting else
-                 theme.c("bad") if error else theme.c("text_dim"))
+        p.setPen(
+            theme.c("warn")
+            if waiting
+            else theme.c("bad") if error else theme.c("text_dim")
+        )
         if error:
             detail = error.replace("\n", "  ")
         else:
-            parts = [x for x in (job.get("size"), job.get("speed"),
-                                 job.get("eta") and f"{job['eta']} left") if x and x != "--"]
+            parts = [
+                x
+                for x in (
+                    job.get("size"),
+                    job.get("speed"),
+                    job.get("eta") and f"{job['eta']} left",
+                )
+                if x and x != "--"
+            ]
             detail = "   ".join(parts)
         detail_x = status_x + status_w
         detail_w = max(40, text_right - detail_x)
         if detail:
-            p.drawText(QRect(detail_x, line3_y, detail_w, fm_detail.height()),
-                       Qt.AlignLeft | Qt.AlignVCenter,
-                       fm_detail.elidedText(detail, Qt.ElideRight, detail_w))
+            p.drawText(
+                QRect(detail_x, line3_y, detail_w, fm_detail.height()),
+                Qt.AlignLeft | Qt.AlignVCenter,
+                fm_detail.elidedText(detail, Qt.ElideRight, detail_w),
+            )
 
         # buttons
         rects = self.button_rects(rect, status, job.get("kind", ""))
-        for i, (_, label, primary, brect) in enumerate(rects):
-            self._paint_button(p, brect, label, primary,
-                               self._hover == (index.row(), i))
+        for i, (action, _label, primary, brect) in enumerate(rects):
+            self._paint_button(
+                p, brect, action, primary, self._hover == (index.row(), i)
+            )
 
         # progress hairline, bottom edge
         # Only states that have actually moved bytes get a track. A Ready row
         # carrying a stale percentage from an earlier attempt would otherwise
         # look like it had started on its own.
-        if status in (engine.DOWNLOADING, engine.PAUSED, engine.RESOLVING) \
-                or status.startswith(engine.PROCESSING):
+        if status in (
+            engine.DOWNLOADING,
+            engine.PAUSED,
+            engine.RESOLVING,
+        ) or status.startswith(engine.PROCESSING):
             track = QRect(rect.left(), rect.bottom() - 2, rect.width(), 2)
             p.fillRect(track, theme.c("track"))
             if pct > 0:
-                fill_colour = theme.c("warn") if status == engine.PAUSED else theme.c("accent")
-                p.fillRect(QRect(track.left(), track.top(),
-                                 int(track.width() * min(pct, 100) / 100), 2), fill_colour)
+                fill_colour = (
+                    theme.c("warn") if status == engine.PAUSED else theme.c("accent")
+                )
+                p.fillRect(
+                    QRect(
+                        track.left(),
+                        track.top(),
+                        int(track.width() * min(pct, 100) / 100),
+                        2,
+                    ),
+                    fill_colour,
+                )
             elif status == engine.RESOLVING:
-                p.fillRect(QRect(track.left(), track.top(), 40, 2), theme.c("accent_low"))
+                p.fillRect(
+                    QRect(track.left(), track.top(), 40, 2), theme.c("accent_low")
+                )
 
         p.restore()
 
@@ -524,6 +748,7 @@ class JobDelegate(QStyledItemDelegate):
 # --------------------------------------------------------------------------- #
 # Empty state
 # --------------------------------------------------------------------------- #
+
 
 class EmptyState(QWidget):
     """Shown over the queue when nothing has been added yet."""
@@ -555,25 +780,38 @@ class EmptyState(QWidget):
         path.lineTo(QPointF(cx, cy + s * 0.15))
         path.lineTo(QPointF(cx + s * 0.35, cy - s * 0.25))
         p.drawPath(path)
-        p.drawLine(QPointF(cx - s * 0.7, cy + s * 0.55), QPointF(cx + s * 0.7, cy + s * 0.55))
-        p.drawLine(QPointF(cx - s * 0.7, cy + s * 0.55), QPointF(cx - s * 0.7, cy + s * 0.25))
-        p.drawLine(QPointF(cx + s * 0.7, cy + s * 0.55), QPointF(cx + s * 0.7, cy + s * 0.25))
+        p.drawLine(
+            QPointF(cx - s * 0.7, cy + s * 0.55), QPointF(cx + s * 0.7, cy + s * 0.55)
+        )
+        p.drawLine(
+            QPointF(cx - s * 0.7, cy + s * 0.55), QPointF(cx - s * 0.7, cy + s * 0.25)
+        )
+        p.drawLine(
+            QPointF(cx + s * 0.7, cy + s * 0.55), QPointF(cx + s * 0.7, cy + s * 0.25)
+        )
 
         p.setFont(theme.font(theme.SIZE["md"], weight=600))
         p.setPen(theme.c("text_dim"))
-        p.drawText(QRect(0, int(cy + 48), self.width(), 26),
-                   Qt.AlignHCenter | Qt.AlignVCenter, self._title)
+        p.drawText(
+            QRect(0, int(cy + 48), self.width(), 26),
+            Qt.AlignHCenter | Qt.AlignVCenter,
+            self._title,
+        )
 
         p.setFont(theme.font(theme.SIZE["sm"]))
         p.setPen(theme.c("text_faint"))
-        p.drawText(QRect(0, int(cy + 74), self.width(), 22),
-                   Qt.AlignHCenter | Qt.AlignVCenter, self._body)
+        p.drawText(
+            QRect(0, int(cy + 74), self.width(), 22),
+            Qt.AlignHCenter | Qt.AlignVCenter,
+            self._body,
+        )
         p.end()
 
 
 # --------------------------------------------------------------------------- #
 # Engine health badge
 # --------------------------------------------------------------------------- #
+
 
 class EngineBadge(QWidget):
     """
@@ -610,8 +848,11 @@ class EngineBadge(QWidget):
     def paintEvent(self, event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        color = {"ok": theme.c("ok"), "bad": theme.c("bad"),
-                 "busy": theme.c("warn")}.get(self._state, theme.c("text_faint"))
+        color = {
+            "ok": theme.c("ok"),
+            "bad": theme.c("bad"),
+            "busy": theme.c("warn"),
+        }.get(self._state, theme.c("text_faint"))
 
         p.fillRect(self.rect(), theme.c("raised"))
         p.setPen(QPen(theme.c("line"), 1))
@@ -635,6 +876,7 @@ class EngineBadge(QWidget):
 # Keyboard
 # --------------------------------------------------------------------------- #
 
+
 def key_action(key, status: str) -> str | None:
     """
     The row action a key press means for a job in `status`, or None.
@@ -644,13 +886,21 @@ def key_action(key, status: str) -> str | None:
     opens a finished download, matching a double-click.
     """
     if key == Qt.Key_Space:
-        return {engine.DOWNLOADING: "pause", engine.PAUSED: "resume",
-                engine.READY: "download", engine.FAILED: "retry",
-                engine.CANCELLED: "retry"}.get(status)
+        return {
+            engine.DOWNLOADING: "pause",
+            engine.PAUSED: "resume",
+            engine.READY: "download",
+            engine.FAILED: "retry",
+            engine.CANCELLED: "retry",
+        }.get(status)
     if key in (Qt.Key_Return, Qt.Key_Enter):
-        return {engine.DONE: "open", engine.READY: "download",
-                engine.PAUSED: "resume", engine.FAILED: "retry",
-                engine.CANCELLED: "retry"}.get(status)
+        return {
+            engine.DONE: "open",
+            engine.READY: "download",
+            engine.PAUSED: "resume",
+            engine.FAILED: "retry",
+            engine.CANCELLED: "retry",
+        }.get(status)
     if key in (Qt.Key_Delete, Qt.Key_Backspace):
         # Deleting a running download is more likely a slip than an intent;
         # Cancel is a deliberate button.
@@ -662,6 +912,7 @@ def key_action(key, status: str) -> str | None:
 # --------------------------------------------------------------------------- #
 # Clipboard offer
 # --------------------------------------------------------------------------- #
+
 
 class OfferBar(QFrame):
     """

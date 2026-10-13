@@ -72,7 +72,8 @@ def _dispose(w, qapp) -> None:
 
 
 class _Sig:
-    def connect(self, *_a): pass
+    def connect(self, *_a):
+        pass
 
 
 class _FakeSignals:
@@ -90,6 +91,7 @@ def add(w, url="https://youtu.be/AAAAAAAAAAA", status=engine.READY, title="T", *
     item.setData(Qt.UserRole, w._job_data(job))
     item.setData(Qt.UserRole + 1, job.job_id)
     from PySide6.QtCore import QSize
+
     item.setSizeHint(QSize(0, ROW_HEIGHT))
     w.queue.addItem(item)
     w.items[job.job_id] = item
@@ -102,12 +104,14 @@ def answer(monkeypatch, reply):
     def fake(parent, title, text, *a, **k):
         calls.append(text)
         return reply
+
     monkeypatch.setattr(QMessageBox, "question", staticmethod(fake))
     monkeypatch.setattr(QMessageBox, "warning", staticmethod(fake))
     return calls
 
 
 # -- duplicates ---------------------------------------------------------------- #
+
 
 def test_duplicate_in_queue_asks_and_respects_no(win, monkeypatch):
     add(win, "https://youtu.be/AAAAAAAAAAA", title="First")
@@ -141,8 +145,15 @@ def test_same_link_twice_in_one_paste_asks_once(win, monkeypatch):
 
 
 def test_history_counts_as_duplicate(win, monkeypatch):
-    win.store.add_history(Job(url="https://youtu.be/HHHHHHHHHHH", title="Seen",
-                              status=engine.DONE, filepath="/x", folder="/"))
+    win.store.add_history(
+        Job(
+            url="https://youtu.be/HHHHHHHHHHH",
+            title="Seen",
+            status=engine.DONE,
+            filepath="/x",
+            folder="/",
+        )
+    )
     calls = answer(monkeypatch, QMessageBox.No)
     win.url_input.setText("https://www.youtube.com/watch?v=HHHHHHHHHHH")
     win.add_from_input()
@@ -150,6 +161,7 @@ def test_history_counts_as_duplicate(win, monkeypatch):
 
 
 # -- clipboard ----------------------------------------------------------------- #
+
 
 def test_clipboard_off_by_default(win):
     assert win.settings.watch_clipboard is False
@@ -164,7 +176,7 @@ def test_clipboard_offers_once_when_enabled(win):
     win._on_clipboard()
     assert win.offer.isVisibleTo(win)
     win.offer.dismiss()
-    win._on_clipboard()                      # same text again: no second offer
+    win._on_clipboard()  # same text again: no second offer
     assert not win.offer.isVisibleTo(win)
 
 
@@ -189,6 +201,7 @@ def test_accepting_offer_stages_link(win):
 
 
 # -- retry --------------------------------------------------------------------- #
+
 
 def test_transient_failure_schedules_retry(win):
     job = add(win, status=engine.DOWNLOADING)
@@ -232,8 +245,11 @@ def test_cancel_during_retry_wait(win):
 
 def test_fire_retry_restarts(win, monkeypatch):
     started = []
-    monkeypatch.setattr(win, "start_download",
-                        lambda jid, check_space=True: started.append((jid, check_space)))
+    monkeypatch.setattr(
+        win,
+        "start_download",
+        lambda jid, check_space=True: started.append((jid, check_space)),
+    )
     job = add(win, status=engine.DOWNLOADING)
     win._on_failed(job.job_id, "timed out")
     win._fire_retry(job.job_id)
@@ -256,9 +272,12 @@ def test_remove_during_retry_wait_clears_timer(win):
 
 # -- reorder -------------------------------------------------------------------- #
 
+
 def test_dragging_reranks_waiting_downloads(win, monkeypatch):
     seen = []
-    monkeypatch.setattr(win.manager, "apply_order", lambda order: seen.append(order) or 0)
+    monkeypatch.setattr(
+        win.manager, "apply_order", lambda order: seen.append(order) or 0
+    )
     a = add(win, "https://youtu.be/AAAAAAAAAAA")
     b = add(win, "https://youtu.be/BBBBBBBBBBB")
     win.queue.model().moveRow(QModelIndex(), 1, QModelIndex(), 0)
@@ -267,8 +286,11 @@ def test_dragging_reranks_waiting_downloads(win, monkeypatch):
 
 def test_start_passes_list_position_as_priority(win, monkeypatch):
     got = []
-    monkeypatch.setattr(win.manager, "submit",
-                        lambda job, position=0: got.append(position) or _FakeWorker())
+    monkeypatch.setattr(
+        win.manager,
+        "submit",
+        lambda job, position=0: got.append(position) or _FakeWorker(),
+    )
     add(win, "https://youtu.be/AAAAAAAAAAA")
     b = add(win, "https://youtu.be/BBBBBBBBBBB")
     win.start_download(b.job_id, check_space=False)
@@ -289,6 +311,7 @@ def test_dragging_reorders_jobs_and_saves(win):
 
 # -- history / redo -------------------------------------------------------------- #
 
+
 def test_finishing_records_history(win):
     job = add(win, status=engine.DOWNLOADING, title="Lecture")
     win._on_finished(job.job_id, str(Path("/tmp") / "x.mp4"))
@@ -306,8 +329,9 @@ def test_history_outlives_queue_removal(win):
 
 def test_download_again_resets_and_starts(win, monkeypatch):
     started = []
-    monkeypatch.setattr(win, "start_download",
-                        lambda jid, check_space=True: started.append(jid))
+    monkeypatch.setattr(
+        win, "start_download", lambda jid, check_space=True: started.append(jid)
+    )
     job = add(win, status=engine.DONE, percent=100.0, filepath="/x.mp4")
     win._redownload(job.job_id)
     assert job.redo and job.status == engine.READY and job.percent == 0
@@ -326,6 +350,7 @@ def test_add_again_from_history(win):
 
 
 # -- log ------------------------------------------------------------------------- #
+
 
 def test_job_log_routes_to_the_right_job(win):
     a = add(win, "https://youtu.be/AAAAAAAAAAA")
@@ -348,21 +373,25 @@ def test_failure_text_lands_in_job_log(win):
 
 # -- keyboard --------------------------------------------------------------------- #
 
-@pytest.mark.parametrize("key,status,action", [
-    (Qt.Key_Space, engine.DOWNLOADING, "pause"),
-    (Qt.Key_Space, engine.PAUSED, "resume"),
-    (Qt.Key_Space, engine.READY, "download"),
-    (Qt.Key_Space, engine.FAILED, "retry"),
-    (Qt.Key_Space, engine.DONE, None),
-    (Qt.Key_Return, engine.DONE, "open"),
-    (Qt.Key_Enter, engine.READY, "download"),
-    (Qt.Key_Return, engine.DOWNLOADING, None),
-    (Qt.Key_Delete, engine.READY, "remove"),
-    (Qt.Key_Delete, engine.DONE, "remove"),
-    (Qt.Key_Delete, engine.DOWNLOADING, None),
-    (Qt.Key_Delete, "Cancelling", None),
-    (Qt.Key_A, engine.READY, None),
-])
+
+@pytest.mark.parametrize(
+    "key,status,action",
+    [
+        (Qt.Key_Space, engine.DOWNLOADING, "pause"),
+        (Qt.Key_Space, engine.PAUSED, "resume"),
+        (Qt.Key_Space, engine.READY, "download"),
+        (Qt.Key_Space, engine.FAILED, "retry"),
+        (Qt.Key_Space, engine.DONE, None),
+        (Qt.Key_Return, engine.DONE, "open"),
+        (Qt.Key_Enter, engine.READY, "download"),
+        (Qt.Key_Return, engine.DOWNLOADING, None),
+        (Qt.Key_Delete, engine.READY, "remove"),
+        (Qt.Key_Delete, engine.DONE, "remove"),
+        (Qt.Key_Delete, engine.DOWNLOADING, None),
+        (Qt.Key_Delete, "Cancelling", None),
+        (Qt.Key_A, engine.READY, None),
+    ],
+)
 def test_key_table(key, status, action):
     assert key_action(key, status) == action
 
@@ -395,6 +424,7 @@ def test_space_pauses_downloading_row(win, monkeypatch):
 
 # -- options tag -------------------------------------------------------------------- #
 
+
 def test_row_tag_shows_format_and_folder(win):
     job = add(win, fmt="video|1080p|mp4|av1", dest="/media/videos")
     assert appmod.row_tag(job) == "1080p MP4 AV1, to videos"
@@ -403,12 +433,236 @@ def test_row_tag_shows_format_and_folder(win):
 
 def test_space_check_is_per_folder(win, monkeypatch):
     from ambaar import space
+
     asked = answer(monkeypatch, QMessageBox.No)
-    a = add(win, "https://youtu.be/AAAAAAAAAAA", dest="/mnt/small",
-            sizes=space.pack_sizes({"duration": 10, "formats": [
-                {"vcodec": "a", "acodec": "none", "height": 720, "filesize": 5 * 2**30}]}))
-    monkeypatch.setattr(space, "free_bytes",
-                        lambda p: 1 * 2**30 if "small" in str(p) else 500 * 2**30)
+    a = add(
+        win,
+        "https://youtu.be/AAAAAAAAAAA",
+        dest="/mnt/small",
+        sizes=space.pack_sizes(
+            {
+                "duration": 10,
+                "formats": [
+                    {
+                        "vcodec": "a",
+                        "acodec": "none",
+                        "height": 720,
+                        "filesize": 5 * 2**30,
+                    }
+                ],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        space, "free_bytes", lambda p: 1 * 2**30 if "small" in str(p) else 500 * 2**30
+    )
     assert win._space_ok([a]) is False and "/mnt/small" in asked[0]
     b = add(win, "https://youtu.be/BBBBBBBBBBB", sizes=a.sizes)
     assert win._space_ok([b]) is True
+
+
+# -- the link bar stages links without a second step ------------------------------- #
+#
+# The original complaint: paste a link, click away, and it just sat in the box.
+# Nothing was checked and there was nothing to press. These pin the behaviour
+# that replaced it.
+
+LINK = "https://youtu.be/fzfDuKj9B6U"
+
+
+def _staged(w) -> list[Job]:
+    return list(w.jobs.values())
+
+
+def test_pasting_a_link_stages_it_and_clears_the_box(win, qapp):
+    win.url_input.insert(LINK)  # one jump of many characters = a paste
+    qapp.processEvents()
+    assert [j.url for j in _staged(win)] == [LINK]
+    assert win.url_input.text() == ""
+    assert win.queue.count() == 1
+
+
+def test_typing_a_link_waits_until_it_is_finished(win, qapp):
+    for ch in LINK:  # one character at a time is typing
+        QTest.keyClick(win.url_input, ch)
+    qapp.processEvents()
+    assert _staged(win) == []
+    assert win.url_input.text() == LINK
+
+
+def test_enter_stages_a_typed_link(win, qapp):
+    for ch in LINK:
+        QTest.keyClick(win.url_input, ch)
+    QTest.keyClick(win.url_input, Qt.Key_Return)
+    qapp.processEvents()
+    assert [j.url for j in _staged(win)] == [LINK]
+    assert win.url_input.text() == ""
+
+
+def test_leaving_the_box_stages_a_typed_link(win, qapp):
+    for ch in LINK:
+        QTest.keyClick(win.url_input, ch)
+    win.url_input.editingFinished.emit()  # what focus moving away does
+    qapp.processEvents()
+    assert [j.url for j in _staged(win)] == [LINK]
+    assert win.url_input.text() == ""
+
+
+def test_add_button_stages_the_link(win, qapp):
+    from PySide6.QtWidgets import QPushButton
+
+    add = next(b for b in win.findChildren(QPushButton) if b.text() == "Add")
+    win.url_input.setText(LINK)  # setText is not an edit: nothing yet
+    qapp.processEvents()
+    assert _staged(win) == []
+    add.click()
+    assert [j.url for j in _staged(win)] == [LINK]
+    assert win.url_input.text() == ""
+
+
+def test_add_button_is_not_called_download(win):
+    from PySide6.QtWidgets import QPushButton
+
+    labels = {b.text() for b in win.findChildren(QPushButton)}
+    assert "Add" in labels
+    # "Download" belongs to the row; the bar only checks and lists.
+    assert "Download" not in labels
+
+
+def test_losing_focus_with_plain_text_is_silent(win, qapp):
+    win._status("ready")
+    win.url_input.setText("not a link")
+    win.url_input.editingFinished.emit()
+    qapp.processEvents()
+    assert _staged(win) == []
+    assert win.url_input.text() == "not a link"  # left for the user to fix
+    assert "does not look like a link" not in win.statusBar().currentMessage()
+
+
+def test_enter_on_plain_text_says_so(win, qapp):
+    win.url_input.setText("not a link")
+    win.add_from_input()
+    assert _staged(win) == []
+    assert "does not look like a link" in win.statusBar().currentMessage()
+
+
+def test_enter_does_not_stage_twice(win, qapp):
+    # Enter fires returnPressed and then editingFinished; the box is already
+    # empty by the second, so the link must land once.
+    win.url_input.setText(LINK)
+    QTest.keyClick(win.url_input, Qt.Key_Return)
+    win.url_input.editingFinished.emit()
+    qapp.processEvents()
+    assert len(_staged(win)) == 1
+
+
+def test_several_pasted_links_each_get_a_row(win, qapp):
+    other = "https://youtu.be/AAAAAAAAAAA"
+    win.url_input.insert(f"{LINK} {other}")
+    qapp.processEvents()
+    assert sorted(j.url for j in _staged(win)) == sorted([LINK, other])
+    assert win.queue.count() == 2
+
+
+def test_pasted_link_lands_on_the_queue_page(win, qapp):
+    win._show_page(1, sync_nav=True)
+    win.url_input.insert(LINK)
+    qapp.processEvents()
+    assert win.stack.currentIndex() == 0
+
+
+# -- row buttons and the header menu ------------------------------------------------ #
+
+
+def test_every_row_button_has_a_tooltip_and_an_icon():
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QColor, QImage, QPainter
+    from ambaar.widgets import JobDelegate, TOOLTIPS, paint_icon
+
+    statuses = [
+        engine.READY,
+        engine.DOWNLOADING,
+        engine.PAUSED,
+        engine.QUEUED,
+        engine.RESOLVING,
+        "Processing (Merger)",
+        engine.DONE,
+        engine.FAILED,
+        engine.CANCELLED,
+    ]
+    actions = {a for s in statuses for a, _l, _p in JobDelegate.buttons_for(s)}
+    actions.add("items")
+    for action in sorted(actions):
+        assert TOOLTIPS.get(action), f"no tooltip for {action}"
+        img = QImage(34, 28, QImage.Format_ARGB32)
+        img.fill(0)
+        p = QPainter(img)
+        paint_icon(p, action, QRect(0, 0, 34, 28), QColor("#ffffff"))
+        p.end()
+        drawn = sum(
+            1
+            for x in range(34)
+            for y in range(28)
+            if QColor(img.pixel(x, y)).alpha() > 0
+        )
+        assert drawn > 12, f"{action} drew nothing"
+
+
+def test_ready_row_offers_download_and_remove_together():
+    from ambaar.widgets import JobDelegate
+
+    actions = [a for a, _l, _p in JobDelegate.buttons_for(engine.READY)]
+    assert actions[0] == "download" and actions[-1] == "remove"
+
+
+def test_running_rows_offer_pause_and_cancel():
+    from ambaar.widgets import JobDelegate
+
+    assert [a for a, *_ in JobDelegate.buttons_for(engine.DOWNLOADING)] == [
+        "pause",
+        "cancel",
+    ]
+    assert [a for a, *_ in JobDelegate.buttons_for(engine.PAUSED)] == [
+        "resume",
+        "cancel",
+    ]
+
+
+def test_clicking_a_row_icon_emits_its_action(win, qapp):
+    from PySide6.QtCore import QPoint
+    from ambaar.widgets import JobDelegate
+
+    job = add(win, status=engine.READY)
+    seen = []
+    win._delegate.action.connect(lambda jid, act: seen.append((jid, act)))
+    win.resize(1000, 640)
+    win.show()
+    qapp.processEvents()
+    idx = win.queue.model().index(0, 0)
+    row = win.queue.visualRect(idx)
+    rects = JobDelegate.button_rects(row, engine.READY)
+    dl = next(r for a, _l, _p, r in rects if a == "download")
+    QTest.mouseClick(win.queue.viewport(), Qt.LeftButton, Qt.NoModifier, dl.center())
+    assert seen == [(job.job_id, "download")]
+
+
+def test_header_has_pause_all_and_a_more_menu(win):
+    assert win.btn_start.text() == "Download all"
+    assert win.btn_pause_all.text() == "Pause all"
+    assert win.btn_resume_all.text() == "Resume all"
+    labels = [a.text() for a in win.btn_more.menu().actions() if a.text()]
+    assert labels == [
+        "Cancel selected",
+        "Retry selected",
+        "Clear finished",
+        "Clear queue",
+    ]
+
+
+def test_header_buttons_are_never_clipped(win, qapp):
+    win.resize(900, 640)
+    win.show()
+    qapp.processEvents()
+    for b in win.queue_actions:
+        assert b.width() >= b.sizeHint().width(), b.text()
+        assert b.isVisible()

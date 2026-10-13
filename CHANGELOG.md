@@ -1,3 +1,4 @@
+<!-- CHANGELOG.md -->
 # Changelog
 
 Notable changes per release. Format follows [Keep a Changelog](https://keepachangelog.com/1.1.0/);
@@ -8,8 +9,13 @@ versions follow [SemVer](https://semver.org/).
 ### Changed
 - Staged flow. A pasted link is checked first and added as Ready; downloading
   starts only when you press Download. Rows are tagged VIDEO or PLAYLIST.
-- Rows carry inline buttons that follow the job's state, replacing the
-  header-only controls.
+- Rows carry inline icon buttons that follow the job's state (download, pause,
+  resume, cancel, retry, open folder, options, remove), each with a tooltip,
+  replacing the header-only controls. The header keeps the whole-list actions;
+  the rest moved under a More menu so no button is clipped at narrow widths.
+- A pasted link is added to the list immediately, on paste, Enter, the Add
+  button, or when focus leaves the bar. Typing alone never adds half a URL.
+  The bar's button is now labelled Add; Download belongs to the row.
 - Double-click plays a finished video in the default player, opens the folder
   for a playlist, and starts a Ready row.
 - Build scripts stop a running ambaar before building and no longer upgrade
