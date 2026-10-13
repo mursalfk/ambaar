@@ -1,3 +1,4 @@
+# ambaar/updater.py
 """
 Self-verifying yt-dlp updater.
 
@@ -57,6 +58,10 @@ DEFAULT_PROBE_URL = "https://www.youtube.com/watch?v=jNQXAC9IVRw"
 # engine that cannot decipher current players -- and the version number gives
 # no hint. This is the usual cause of "nsig extraction failed".
 MIN_PYTHON = (3, 9)
+
+# Argument the frozen app passes to itself to run a probe instead of the GUI.
+# See _probe_command() for why a frozen build cannot use "python -c".
+PROBE_FLAG = "--ambaar-probe"
 
 # PyPI JSON, used by frozen builds that cannot run pip.
 PYPI_API = "https://pypi.org/pypi/yt-dlp/json"
@@ -186,6 +191,14 @@ def installed_version() -> str:
 
 def installed_version_fresh() -> str:
     """Version as seen by a fresh interpreter -- accurate after an in-place upgrade."""
+    # In a frozen build sys.executable is ambaar.exe, not python. Spawning it
+    # relaunches the GUI instead of running the snippet, and that second copy
+    # runs its own startup check and relaunches again. There is no in-place pip
+    # upgrade to go stale against in a frozen build anyway, so the in-process
+    # value is already accurate.
+    if is_frozen():
+        return installed_version()
+
     code = "import yt_dlp.version;print(yt_dlp.version.__version__)"
     try:
         out = subprocess.run(
@@ -315,11 +328,40 @@ _PROBE_SOURCE = textwrap.dedent(
 )
 
 
+def _probe_command(url: str) -> list[str]:
+    """
+    How to launch the probe child process.
+
+    From source, sys.executable is python and "-c <source>" runs the snippet.
+
+    In a frozen build sys.executable is ambaar.exe, which ignores "-c" and just
+    starts the GUI again. That copy runs its own weekly check, which probes,
+    which starts a third copy -- the app reopens endlessly and the only way out
+    is killing the process tree. The flag below routes the child into probe mode
+    instead; main.py handles it before any GUI import.
+    """
+    if is_frozen():
+        return [sys.executable, PROBE_FLAG, url]
+    return [sys.executable, "-c", _PROBE_SOURCE, url]
+
+
+def run_probe_child(url: str) -> int:
+    """
+    Entry point for the frozen app relaunched with PROBE_FLAG.
+
+    Runs the same source the from-source path passes to "python -c", so both
+    modes probe identically and there is only one copy of the logic.
+    """
+    sys.argv = ["probe", url]
+    exec(compile(_PROBE_SOURCE, "<probe>", "exec"), {"__name__": "__main__"})
+    return 0
+
+
 def probe(url: str = DEFAULT_PROBE_URL) -> ProbeResult:
     """Verify end-to-end that the installed yt-dlp can produce a fetchable media URL."""
     try:
         proc = subprocess.run(
-            [sys.executable, "-c", _PROBE_SOURCE, url],
+            _probe_command(url),
             capture_output=True, text=True, timeout=PROBE_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
@@ -348,6 +390,12 @@ def probe(url: str = DEFAULT_PROBE_URL) -> ProbeResult:
 # --------------------------------------------------------------------------- #
 
 def pip_install(spec: str, force: bool = False) -> tuple[bool, str]:
+    # run_update() routes frozen builds to install_wheel(), so this should never
+    # be reached there. Guard anyway: sys.executable is ambaar.exe in a frozen
+    # build, and "-m pip" would relaunch the GUI rather than fail.
+    if is_frozen():
+        return False, "pip is unavailable in a packaged build; use install_wheel()"
+
     cmd = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--no-input"]
     if force:
         cmd.append("--force-reinstall")

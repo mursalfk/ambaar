@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
+# packaging/build.sh
+#
 # Build a standalone Ambaar for macOS or Linux.
 #
 #   ./packaging/build.sh
 #
-# Output lands in dist/. Run from the repository root.
+# Output lands in dist/. Run from anywhere; the script locates the repo itself.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -15,33 +17,56 @@ if [[ ! -d .venv ]]; then
 fi
 source .venv/bin/activate
 
-PYV=$(python -c 'import sys;print("%d.%d"%sys.version_info[:2])')
-echo "Python $PYV"
-python - <<'PY'
+# Call the interpreter by absolute path and reach every tool through "-m".
+#
+# Console scripts (pip, pyinstaller) embed the absolute path of the interpreter
+# that created them. Move or rename the project folder and every shim keeps
+# pointing at the old location while python itself still works -- so the failure
+# reads as a missing package rather than a moved venv. Going through "-m"
+# sidesteps the shims entirely.
+PY="$PWD/.venv/bin/python"
+if [[ ! -x "$PY" ]]; then
+  echo "No interpreter at $PY -- the venv is incomplete. Recreate it:"
+  echo "    rm -rf .venv && python3 -m venv .venv"
+  exit 1
+fi
+
+echo "Python $("$PY" -c 'import sys;print("%d.%d.%d"%sys.version_info[:3])')  ($PY)"
+"$PY" - <<'PY'
 import sys
 if sys.version_info[:2] < (3, 9):
-    sys.exit("Python 3.9+ required; yt-dlp will not install correctly below that.")
+    sys.exit("Python 3.9+ required. Below that pip installs an obsolete yt-dlp "
+             "instead of refusing.")
 PY
 
+if [[ -n "${CONDA_DEFAULT_ENV:-}" ]]; then
+  echo "Warning: conda environment '$CONDA_DEFAULT_ENV' is active."
+  echo "         Run 'conda deactivate' first, or PyInstaller may bundle conda's Qt."
+fi
+
 echo "Installing build dependencies"
-pip install -q -U -r requirements.txt
-pip install -q -U pyinstaller pillow
-echo "PyInstaller $(python -c 'import PyInstaller;print(PyInstaller.__version__)')  /  Qt $(python -c 'from PySide6 import QtCore;print(QtCore.qVersion())')"
+"$PY" -m pip install -q -U -r requirements.txt
+"$PY" -m pip install -q -U pyinstaller pillow
+echo "PyInstaller $("$PY" -c 'import PyInstaller;print(PyInstaller.__version__)')  /  Qt $("$PY" -c 'from PySide6 import QtCore;print(QtCore.qVersion())')"
 
 echo "Generating icons"
-python packaging/make_icons.py
+"$PY" packaging/make_icons.py
 
 echo "Building"
 rm -rf build dist
-pyinstaller packaging/ambaar.spec --noconfirm --clean
+"$PY" -m PyInstaller packaging/ambaar.spec --noconfirm --clean
 
 echo
 echo "Built:"
 ls -la dist/
 echo
+echo "Launch it before shipping -- a build that compiles is not evidence that it runs."
+echo
 echo "Package it for release:"
 if [[ "$OSTYPE" == "darwin"* ]]; then
-  echo "    cd dist && zip -r ambaar-macos.zip 'Ambaar.app'"
+  # -y preserves the symlinks inside the .app bundle; without it macOS refuses
+  # to launch the extracted copy.
+  echo "    cd dist && zip -r -y ambaar-macos.zip 'Ambaar.app'"
 else
   echo "    cd dist && tar czf ambaar-linux.tar.gz ambaar"
 fi
