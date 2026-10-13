@@ -5,6 +5,42 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- Staged flow. A pasted link is checked first and added as Ready; downloading
+  starts only when you press Download. Rows are tagged VIDEO or PLAYLIST.
+- Rows carry inline buttons that follow the job's state, replacing the
+  header-only controls.
+- Double-click plays a finished video in the default player, opens the folder
+  for a playlist, and starts a Ready row.
+- Build scripts stop a running ambaar before building and no longer upgrade
+  PySide6 implicitly.
+
+### Added
+- Options on each Ready row: quality ceiling, codec (H.264, VP9, AV1),
+  container, audio-only, and a per-item output folder. Choices are limited to
+  what the video offers.
+- Playlist item picker: take 3 of 40 videos.
+- Disk-space check before a download starts, per destination folder.
+- Duplicate detection against the queue, the download archive and history.
+- History page: searchable record of finished downloads that outlives the queue.
+- Clipboard watcher (off by default) offering to add copied video links.
+- Automatic retry with backoff for network failures, with a visible countdown.
+- Drag rows to reorder the queue; order is saved.
+- Keyboard shortcuts and a Queue menu.
+- Per-item log, and Download again.
+- Real Pause and Resume, keeping the partial file. Pause all, Resume all, and
+  aggregate speed and count in the status bar.
+- Thumbnails in the queue.
+- Queue persistence in SQLite; interrupted downloads return as Paused.
+- Desktop notification when a download finishes, with a Settings toggle.
+- Clear queue.
+
+### Fixed
+- A playlist added while the global playlist setting was off saved its videos
+  loose in the output folder and fetched only the first one.
+- Links stuck on Resolving and Cancel being ignored during metadata lookup;
+  resolving now has a socket timeout and an interrupt point.
+
 ## [1.1.0]
 
 First public release.

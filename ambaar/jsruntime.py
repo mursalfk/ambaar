@@ -1,3 +1,4 @@
+# ambaar/jsruntime.py
 """
 JavaScript runtime detection.
 
@@ -143,3 +144,21 @@ def fetch(on_progress: Callable[[str, float], None] | None = None) -> tuple[bool
         return False, f"Download failed: {e}. Install manually: {install_instructions()}"
     except (OSError, zipfile.BadZipFile) as e:
         return False, f"Could not unpack the archive: {e}"
+
+
+def ensure_on_path() -> bool:
+    """
+    Put the managed tools directory on PATH so yt-dlp can discover Deno itself.
+
+    Idempotent. Prepends rather than appends, so a managed copy wins over a
+    system one the user may not have intended to use. Returns True if the
+    directory is now on PATH.
+    """
+    import os
+
+    folder = str(tools_dir())
+    parts = os.environ.get("PATH", "").split(os.pathsep)
+    if folder in parts:
+        return True
+    os.environ["PATH"] = os.pathsep.join([folder, *parts])
+    return True

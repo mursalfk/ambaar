@@ -1,3 +1,4 @@
+# ambaar/theme.py
 """
 Design system: colour, type, and the generated stylesheet.
 
@@ -230,6 +231,10 @@ QCheckBox::indicator:hover    { border-color: $text_faint; }
 QCheckBox::indicator:checked  { background: $accent; border-color: $accent; }
 QCheckBox:disabled            { color: $text_faint; }
 
+/* ---- clipboard offer -------------------------------------------------- */
+#OfferBar { background: $surface; border-bottom: 1px solid $line;
+            border-left: 2px solid $accent; }
+
 /* ---- queue ------------------------------------------------------------ */
 QListWidget {
     background: $ink; border: 1px solid $line_soft; outline: none;
@@ -237,6 +242,12 @@ QListWidget {
 }
 QListWidget::item { border: none; }
 QListWidget::item:selected { background: transparent; }
+QListWidget::indicator {
+    width: 15px; height: 15px;
+    border: 1px solid $line; background: $surface;
+}
+QListWidget::indicator:hover   { border-color: $text_faint; }
+QListWidget::indicator:checked { background: $accent; border-color: $accent; }
 
 /* ---- containers ------------------------------------------------------- */
 #Panel  { background: $surface; border-left: 1px solid $line_soft; }

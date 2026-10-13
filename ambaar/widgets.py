@@ -1,3 +1,4 @@
+# ambaar/widgets.py
 """
 Custom widgets and painting.
 
@@ -10,28 +11,43 @@ inherit colour from the palette for free.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import (QColor, QFontMetrics, QPainter, QPainterPath, QPen,
+                           QPixmap)
 from PySide6.QtWidgets import (
-    QComboBox, QSpinBox, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget,
+    QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSpinBox, QStyle,
+    QStyledItemDelegate, QWidget,
 )
 
-from . import theme
+from . import engine, theme
 
-ROW_HEIGHT = 66
+# Three text lines plus room for buttons. The row got taller when it gained a
+# kind tag and inline controls; cramming those into the old 66px meant 11px
+# gaps everywhere, which reads as broken rather than dense.
+ROW_HEIGHT = 84
 ROW_PAD_X = 16
 MARK_SIZE = 14
 MARK_INSET = 16
+THUMB_W = 96
+THUMB_H = 54
+THUMB_INSET = 14
+BUTTON_H = 28
+BUTTON_PAD_X = 14
+BUTTON_GAP = 8
+CHIP_H = 17
 
 STATE_COLOR = {
-    "Queued": "text_faint",
-    "Resolving": "accent",
-    "Downloading": "accent",
-    "Processing": "warn",
+    engine.STAGED: "text_faint",
+    engine.RESOLVING: "accent",
+    engine.READY: "text",
+    engine.QUEUED: "text_faint",
+    engine.DOWNLOADING: "accent",
+    engine.PAUSED: "warn",
+    engine.PROCESSING: "warn",
+    engine.DONE: "ok",
+    engine.FAILED: "bad",
+    engine.CANCELLED: "text_faint",
     "Cancelling": "text_faint",
-    "Done": "ok",
-    "Failed": "bad",
-    "Cancelled": "text_faint",
 }
 
 
@@ -174,125 +190,332 @@ class SpinBox(QSpinBox):
 
 class JobDelegate(QStyledItemDelegate):
     """
-    Paints one download as a row: status mark, title, source line, metrics,
-    and a hairline progress track pinned to the bottom edge.
+    Paints one job as a row and handles its inline buttons.
 
-    A default QTableWidget cannot express this without four columns of widgets,
-    each of which would need styling and none of which would align. Painting the
-    row directly is both faster and the only way to get the typographic
-    hierarchy right.
+    The buttons are painted and hit-tested here rather than being real widgets
+    in each row. Qt can host a widget per row, but with a hundred rows that is a
+    hundred live widgets to create, style, and keep in sync with job state --
+    and the row's typography (title, source line, status line) is already drawn
+    as one surface, so the buttons may as well join it. The cost is that
+    geometry must be computed identically for painting and for clicking, which
+    is why both go through `button_rects()` and neither computes its own.
     """
+
+    # job_id, action. Actions: download, items, format (shown as Options), pause, resume, cancel, retry, remove, folder
+    action = Signal(str, str)
+
+    def __init__(self, view=None) -> None:
+        super().__init__(view)
+        self._view = view
+        self._hover: tuple[int, int] | None = None   # (row, button index)
+        # Decoded thumbnails, keyed by path. paint() runs on every scroll frame;
+        # re-decoding a JPEG each time would make scrolling stutter.
+        self._pixmaps: dict[str, QPixmap] = {}
+
+    def _thumbnail(self, path: str) -> QPixmap | None:
+        if not path:
+            return None
+        hit = self._pixmaps.get(path)
+        if hit is not None:
+            return hit if not hit.isNull() else None
+        pm = QPixmap(path)
+        if not pm.isNull():
+            pm = pm.scaled(THUMB_W * 2, THUMB_H * 2, Qt.KeepAspectRatioByExpanding,
+                           Qt.SmoothTransformation)
+            pm.setDevicePixelRatio(2)
+        self._pixmaps[path] = pm          # cache the miss too, so it is tried once
+        return pm if not pm.isNull() else None
+
+    def _paint_thumbnail(self, p: QPainter, rect: QRect, job: dict,
+                         status: str, colour: QColor) -> QRect:
+        """Draw the picture, or a placeholder carrying the status mark."""
+        box = QRect(rect.left() + THUMB_INSET,
+                    rect.top() + (rect.height() - THUMB_H) // 2,
+                    THUMB_W, THUMB_H)
+
+        pm = self._thumbnail(job.get("thumb") or "")
+        if pm is not None:
+            # Centre-crop: the scaled pixmap is at least as large as the box in
+            # both directions, so this trims rather than letterboxes.
+            sx = max(0, (pm.width() / pm.devicePixelRatio() - THUMB_W) / 2)
+            sy = max(0, (pm.height() / pm.devicePixelRatio() - THUMB_H) / 2)
+            p.drawPixmap(box, pm, QRectF(sx * pm.devicePixelRatio(),
+                                         sy * pm.devicePixelRatio(),
+                                         THUMB_W * pm.devicePixelRatio(),
+                                         THUMB_H * pm.devicePixelRatio()).toRect())
+        else:
+            p.fillRect(box, theme.c("track"))
+            mark = QRectF(box.center().x() - MARK_SIZE / 2,
+                          box.center().y() - MARK_SIZE / 2, MARK_SIZE, MARK_SIZE)
+            paint_mark(p, mark, status, colour)
+
+        p.setPen(QPen(theme.c("line_soft"), 1))
+        p.setBrush(Qt.NoBrush)
+        p.drawRect(box.adjusted(0, 0, -1, -1))
+        return box
+
+    # -- geometry ------------------------------------------------------------ #
+
+    @staticmethod
+    def buttons_for(status: str, kind: str = "") -> list[tuple[str, str, bool]]:
+        """
+        (action, label, is_primary) for a status.
+
+        One source of truth for which buttons exist. The painter, the hit test
+        and the context menu all read this, so a row can never show a button
+        that does nothing or hide one that should be there.
+        """
+        if status == engine.READY:
+            extra = [("items", "Items", False)] if kind == engine.KIND_PLAYLIST else []
+            return [("download", "Download", True), *extra,
+                    ("format", "Options", False), ("remove", "Remove", False)]
+        if status == engine.DOWNLOADING:
+            return [("pause", "Pause", False), ("cancel", "Cancel", False)]
+        if status == engine.PAUSED:
+            return [("resume", "Resume", True), ("cancel", "Cancel", False)]
+        if status in (engine.QUEUED, engine.RESOLVING):
+            return [("cancel", "Cancel", False)]
+        if status.startswith(engine.PROCESSING):
+            # No pause here: ffmpeg cannot resume a half-written merge, so
+            # offering it would quietly mean redoing the work.
+            return [("cancel", "Cancel", False)]
+        if status == engine.DONE:
+            return [("folder", "Open folder", False), ("remove", "Remove", False)]
+        if status in (engine.FAILED, engine.CANCELLED):
+            return [("retry", "Retry", True), ("remove", "Remove", False)]
+        return []   # Staged: nothing to press while it resolves
+
+    @classmethod
+    def button_rects(cls, rect: QRect, status: str,
+                     kind: str = "") -> list[tuple[str, str, bool, QRect]]:
+        """Lay buttons out right to left, vertically centred."""
+        out = []
+        fm = QFontMetrics(theme.font(theme.SIZE["sm"], weight=600))
+        x = rect.right() - ROW_PAD_X
+        y = rect.top() + (rect.height() - BUTTON_H) // 2
+        for action, label, primary in reversed(cls.buttons_for(status, kind)):
+            w = fm.horizontalAdvance(label) + BUTTON_PAD_X * 2
+            x -= w
+            out.insert(0, (action, label, primary, QRect(x, y, w, BUTTON_H)))
+            x -= BUTTON_GAP
+        return out
+
+    @classmethod
+    def buttons_left_edge(cls, rect: QRect, status: str, kind: str = "") -> int:
+        """Where the text must stop so it never runs under a button."""
+        rects = cls.button_rects(rect, status, kind)
+        return rects[0][3].left() if rects else rect.right() - ROW_PAD_X
 
     def sizeHint(self, option, index) -> QSize:
         return QSize(option.rect.width(), ROW_HEIGHT)
 
+    # -- interaction --------------------------------------------------------- #
+
+    def editorEvent(self, event, model, option, index) -> bool:
+        etype = event.type()
+        if etype not in (QEvent.MouseMove, QEvent.MouseButtonRelease,
+                         QEvent.MouseButtonPress):
+            return False
+
+        job = index.data(Qt.UserRole) or {}
+        status = job.get("status", "")
+        rects = self.button_rects(option.rect, status, job.get("kind", ""))
+        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+
+        hit = next((i for i, (_, _, _, r) in enumerate(rects) if r.contains(pos)), None)
+
+        if etype == QEvent.MouseMove:
+            new_hover = (index.row(), hit) if hit is not None else None
+            if new_hover != self._hover:
+                self._hover = new_hover
+                if self._view is not None:
+                    self._view.viewport().update()
+            return hit is not None
+
+        if hit is None:
+            return False
+
+        # Swallow the press so a click on a button does not also start a
+        # selection drag, and act on the release so a drag off the button
+        # cancels the click, as every other button on the platform does.
+        if etype == QEvent.MouseButtonPress:
+            return True
+
+        job_id = index.data(Qt.UserRole + 1)
+        if job_id:
+            self.action.emit(job_id, rects[hit][0])
+        return True
+
+    # -- painting ------------------------------------------------------------ #
+
+    def _paint_button(self, p: QPainter, rect: QRect, label: str,
+                      primary: bool, hovered: bool) -> None:
+        if primary:
+            bg = theme.c("accent_hi") if hovered else theme.c("accent")
+            p.fillRect(rect, bg)
+            p.setPen(QPen(bg, 1))
+            p.drawRect(rect.adjusted(0, 0, -1, -1))
+            p.setPen(theme.c("on_accent"))
+        else:
+            if hovered:
+                p.fillRect(rect, theme.c("hover"))
+            p.setPen(QPen(theme.c("text_faint") if hovered else theme.c("line"), 1))
+            p.drawRect(rect.adjusted(0, 0, -1, -1))
+            p.setPen(theme.c("text") if hovered else theme.c("text_dim"))
+
+        p.setFont(theme.font(theme.SIZE["sm"], weight=600))
+        p.drawText(rect, Qt.AlignCenter, label)
+
+    def _paint_kind_chip(self, p: QPainter, x: int, y: int, job: dict) -> int:
+        """Draw the VIDEO / PLAYLIST tag. Returns the x to continue from."""
+        kind = job.get("kind", engine.KIND_UNKNOWN)
+        if kind == engine.KIND_UNKNOWN:
+            return x
+
+        label = "PLAYLIST" if kind == engine.KIND_PLAYLIST else "VIDEO"
+        colour = theme.c("accent") if kind == engine.KIND_PLAYLIST else theme.c("text_dim")
+
+        font = theme.font(theme.SIZE["xs"], mono=True, weight=600, tracking=10)
+        fm = QFontMetrics(font)
+        w = fm.horizontalAdvance(label) + 14
+        chip = QRect(x, y, w, CHIP_H)
+
+        p.setPen(QPen(colour, 1))
+        p.setBrush(Qt.NoBrush)
+        p.drawRect(chip.adjusted(0, 0, -1, -1))
+        p.setFont(font)
+        p.drawText(chip, Qt.AlignCenter, label)
+        return x + w + 10
+
     def paint(self, p: QPainter, option, index) -> None:
         job = index.data(Qt.UserRole) or {}
-        status = job.get("status", "Queued")
+        status = job.get("status", engine.STAGED)
         title = job.get("title") or job.get("url", "")
         url = job.get("url", "")
         pct = float(job.get("percent") or 0.0)
-        speed = job.get("speed") or ""
-        eta = job.get("eta") or ""
-        size = job.get("size") or ""
         error = job.get("error") or ""
 
         rect = option.rect
         selected = bool(option.state & QStyle.State_Selected)
-        hovered = bool(option.state & QStyle.State_MouseOver)
+        hovered_row = bool(option.state & QStyle.State_MouseOver)
 
         p.save()
         p.setRenderHint(QPainter.Antialiasing)
 
-        # background
         if selected:
             p.fillRect(rect, theme.c("raised"))
-        elif hovered:
+        elif hovered_row:
             p.fillRect(rect, theme.c("surface"))
         else:
             p.fillRect(rect, theme.c("ink"))
 
-        # selection edge, ember, full-bleed left
         if selected:
             p.fillRect(QRect(rect.left(), rect.top(), 2, rect.height()), theme.c("accent"))
 
-        # bottom hairline separating rows
         p.fillRect(QRect(rect.left(), rect.bottom(), rect.width(), 1), theme.c("line_soft"))
 
-        state_color = theme.c(STATE_COLOR.get(status, "text_faint"))
+        base_status = status.split(" (")[0]
+        state_colour = theme.c(STATE_COLOR.get(base_status, "text_faint"))
 
-        # status mark
-        mark = QRectF(rect.left() + MARK_INSET,
-                      rect.top() + (rect.height() - MARK_SIZE) / 2 - 4,
-                      MARK_SIZE, MARK_SIZE)
-        paint_mark(p, mark, status, state_color)
+        box = self._paint_thumbnail(p, rect, job, base_status, state_colour)
+        text_left = box.right() + 16
+        text_right = self.buttons_left_edge(rect, status, job.get("kind", "")) - 20
+        text_w = max(60, text_right - text_left)
 
-        text_left = int(mark.right() + 16)
-
-        # right-hand metrics, measured first so the title can be elided to fit
-        metrics_font = theme.font(theme.SIZE["sm"], mono=True)
-        fm_meta = QFontMetrics(metrics_font)
-        parts = [x for x in (size, speed, eta and f"{eta} left") if x]
-        metrics_text = "   ".join(parts)
-        metrics_w = fm_meta.horizontalAdvance(metrics_text) if metrics_text else 0
-
-        status_font = theme.font(theme.SIZE["xs"], mono=True, tracking=10, caps=True)
-        fm_status = QFontMetrics(status_font)
-        status_w = fm_status.horizontalAdvance(status)
-
-        right_edge = rect.right() - ROW_PAD_X
-        title_w = right_edge - text_left - max(metrics_w, status_w) - 24
-
-        # title
+        # line 1: title
         title_font = theme.font(theme.SIZE["body"], weight=600)
         fm_title = QFontMetrics(title_font)
         p.setFont(title_font)
-        p.setPen(theme.c("text") if status != "Failed" else theme.c("text_dim"))
-        p.drawText(
-            QRect(text_left, rect.top() + 13, max(title_w, 60), fm_title.height()),
-            Qt.AlignLeft | Qt.AlignVCenter,
-            fm_title.elidedText(title, Qt.ElideRight, max(title_w, 60)),
-        )
+        p.setPen(theme.c("text") if status != engine.FAILED else theme.c("text_dim"))
+        p.drawText(QRect(text_left, rect.top() + 11, text_w, fm_title.height()),
+                   Qt.AlignLeft | Qt.AlignVCenter,
+                   fm_title.elidedText(title, Qt.ElideRight, text_w))
 
-        # second line: error if failed, else the source URL
+        # line 2: kind chip, then what the link is
+        chip_y = rect.top() + 36
+        after_chip = self._paint_kind_chip(p, text_left, chip_y, job)
+
         sub_font = theme.font(theme.SIZE["sm"], mono=True)
         fm_sub = QFontMetrics(sub_font)
         p.setFont(sub_font)
-        p.setPen(theme.c("bad") if error else theme.c("text_faint"))
-        sub_text = error.replace("\n", "  ") if error else url
-        p.drawText(
-            QRect(text_left, rect.top() + 34, max(title_w, 60), fm_sub.height()),
-            Qt.AlignLeft | Qt.AlignVCenter,
-            fm_sub.elidedText(sub_text, Qt.ElideRight, max(title_w, 60)),
-        )
+        p.setPen(theme.c("text_faint"))
 
-        # status word, right aligned on the first line
+        bits = []
+        if job.get("kind") == engine.KIND_PLAYLIST and job.get("item_count"):
+            picked = job.get("selected")
+            total = job["item_count"]
+            bits.append(f"{picked} of {total} items" if picked not in (None, total)
+                        else f"{total} items")
+        dur = engine.human_duration(job.get("duration"))
+        if dur:
+            bits.append(dur)
+        if job.get("uploader"):
+            bits.append(str(job["uploader"]))
+        if job.get("fmt_label"):
+            bits.append(f"[{job['fmt_label']}]")
+        meta = "  ".join(bits) if bits else url
+
+        meta_w = max(40, text_right - after_chip)
+        p.drawText(QRect(after_chip, chip_y, meta_w, CHIP_H),
+                   Qt.AlignLeft | Qt.AlignVCenter,
+                   fm_sub.elidedText(meta, Qt.ElideRight, meta_w))
+
+        # line 3: status word, then live metrics or the error
+        # A small mark leads the status word. Shape carries the state as well as
+        # colour, so the row stays readable without relying on hue alone.
+        line3_y = rect.top() + 58
+        small = 11
+        paint_mark(p, QRectF(text_left, line3_y + 3, small, small),
+                   base_status, state_colour)
+
+        status_font = theme.font(theme.SIZE["xs"], mono=True, tracking=10, caps=True)
+        fm_status = QFontMetrics(status_font)
         p.setFont(status_font)
-        p.setPen(state_color)
-        p.drawText(
-            QRect(right_edge - status_w, rect.top() + 13, status_w, fm_status.height()),
-            Qt.AlignRight | Qt.AlignVCenter, status,
-        )
+        p.setPen(state_colour)
+        status_x = text_left + small + 8
+        status_w = fm_status.horizontalAdvance(status) + 14
+        p.drawText(QRect(status_x, line3_y, status_w, fm_status.height()),
+                   Qt.AlignLeft | Qt.AlignVCenter, status)
 
-        # metrics, right aligned on the second line
-        if metrics_text:
-            p.setFont(metrics_font)
-            p.setPen(theme.c("text_dim"))
-            p.drawText(
-                QRect(right_edge - metrics_w, rect.top() + 34, metrics_w, fm_meta.height()),
-                Qt.AlignRight | Qt.AlignVCenter, metrics_text,
-            )
+        detail_font = theme.font(theme.SIZE["sm"], mono=True)
+        fm_detail = QFontMetrics(detail_font)
+        p.setFont(detail_font)
+        # A retry countdown is news, not a failure: warn colour, not red.
+        waiting = status == engine.QUEUED and bool(error)
+        p.setPen(theme.c("warn") if waiting else
+                 theme.c("bad") if error else theme.c("text_dim"))
+        if error:
+            detail = error.replace("\n", "  ")
+        else:
+            parts = [x for x in (job.get("size"), job.get("speed"),
+                                 job.get("eta") and f"{job['eta']} left") if x and x != "--"]
+            detail = "   ".join(parts)
+        detail_x = status_x + status_w
+        detail_w = max(40, text_right - detail_x)
+        if detail:
+            p.drawText(QRect(detail_x, line3_y, detail_w, fm_detail.height()),
+                       Qt.AlignLeft | Qt.AlignVCenter,
+                       fm_detail.elidedText(detail, Qt.ElideRight, detail_w))
 
-        # progress track, 2px, bottom edge, only while there is progress to show
-        if status in {"Downloading", "Processing", "Resolving"} or 0 < pct < 100:
+        # buttons
+        rects = self.button_rects(rect, status, job.get("kind", ""))
+        for i, (_, label, primary, brect) in enumerate(rects):
+            self._paint_button(p, brect, label, primary,
+                               self._hover == (index.row(), i))
+
+        # progress hairline, bottom edge
+        # Only states that have actually moved bytes get a track. A Ready row
+        # carrying a stale percentage from an earlier attempt would otherwise
+        # look like it had started on its own.
+        if status in (engine.DOWNLOADING, engine.PAUSED, engine.RESOLVING) \
+                or status.startswith(engine.PROCESSING):
             track = QRect(rect.left(), rect.bottom() - 2, rect.width(), 2)
             p.fillRect(track, theme.c("track"))
             if pct > 0:
-                fill = QRect(track.left(), track.top(),
-                             int(track.width() * min(pct, 100) / 100), 2)
-                p.fillRect(fill, theme.c("accent"))
-            elif status == "Resolving":
-                # indeterminate: a short ember tick at the left edge
+                fill_colour = theme.c("warn") if status == engine.PAUSED else theme.c("accent")
+                p.fillRect(QRect(track.left(), track.top(),
+                                 int(track.width() * min(pct, 100) / 100), 2), fill_colour)
+            elif status == engine.RESOLVING:
                 p.fillRect(QRect(track.left(), track.top(), 40, 2), theme.c("accent_low"))
 
         p.restore()
@@ -406,3 +629,86 @@ class EngineBadge(QWidget):
         text = QFontMetrics(font).elidedText(self._version, Qt.ElideRight, box.width())
         p.drawText(box, Qt.AlignLeft | Qt.AlignVCenter, text)
         p.end()
+
+
+# --------------------------------------------------------------------------- #
+# Keyboard
+# --------------------------------------------------------------------------- #
+
+def key_action(key, status: str) -> str | None:
+    """
+    The row action a key press means for a job in `status`, or None.
+
+    One table, tested on its own, so the shortcuts cannot drift from what the
+    buttons offer. Space is the "do the obvious thing" key; Enter additionally
+    opens a finished download, matching a double-click.
+    """
+    if key == Qt.Key_Space:
+        return {engine.DOWNLOADING: "pause", engine.PAUSED: "resume",
+                engine.READY: "download", engine.FAILED: "retry",
+                engine.CANCELLED: "retry"}.get(status)
+    if key in (Qt.Key_Return, Qt.Key_Enter):
+        return {engine.DONE: "open", engine.READY: "download",
+                engine.PAUSED: "resume", engine.FAILED: "retry",
+                engine.CANCELLED: "retry"}.get(status)
+    if key in (Qt.Key_Delete, Qt.Key_Backspace):
+        # Deleting a running download is more likely a slip than an intent;
+        # Cancel is a deliberate button.
+        busy = status in engine.BUSY or status == "Cancelling"
+        return None if busy else "remove"
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# Clipboard offer
+# --------------------------------------------------------------------------- #
+
+class OfferBar(QFrame):
+    """
+    A one-line, non-modal offer shown above the queue.
+
+    Used by the clipboard watcher. A dialog would steal focus from whatever the
+    user was doing when they copied the link; this sits quietly until it is
+    taken or dismissed.
+    """
+
+    accepted = Signal(str)
+    dismissed = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("OfferBar")
+        self._url = ""
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(22, 9, 18, 9)
+        lay.setSpacing(10)
+        self._text = QLabel("")
+        self._text.setProperty("role", "mono")
+        lay.addWidget(self._text, 1)
+        add = QPushButton("Add to queue")
+        add.setProperty("variant", "primary")
+        add.clicked.connect(self._accept)
+        no = QPushButton("Dismiss")
+        no.setProperty("variant", "ghost")
+        no.clicked.connect(self.dismiss)
+        lay.addWidget(add)
+        lay.addWidget(no)
+        self.hide()
+
+    def show_offer(self, url: str) -> None:
+        self._url = url
+        fm = QFontMetrics(self._text.font())
+        self._text.setText("Link copied   " + fm.elidedText(url, Qt.ElideMiddle, 520))
+        self._text.setToolTip(url)
+        self.show()
+
+    def _accept(self) -> None:
+        url, self._url = self._url, ""
+        self.hide()
+        if url:
+            self.accepted.emit(url)
+
+    def dismiss(self) -> None:
+        self._url = ""
+        self.hide()
+        self.dismissed.emit()

@@ -1,3 +1,4 @@
+# ambaar/app.py
 """
 Main window.
 
@@ -17,26 +18,35 @@ from pathlib import Path
 from PySide6.QtCore import (
     QEvent, QObject, QRunnable, QSize, Qt, QThreadPool, QTimer, QUrl, Signal, Slot,
 )
-from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication
+from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QFileDialog, QFormLayout, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
-    QMessageBox, QPushButton, QScrollArea, QStackedWidget, QStatusBar, QTextEdit,
+    QMenu, QMessageBox, QPushButton, QScrollArea, QStackedWidget, QStatusBar,
+    QSystemTrayIcon, QTextEdit,
     QVBoxLayout, QWidget,
 )
 
 from . import branding
 from . import ffmpeg as ffmpeg_tool
-from . import jsruntime
+from . import jsruntime, links, space
 from . import theme, updater
 from .bootstrap import engine_source
+from . import engine
+from .formatdialog import FormatDialog
+from .historypage import HistoryPage, when
+from .itemsdialog import ItemsDialog
+from .logdialog import LogDialog
+from .store import QueueStore, discard_incomplete
 from .engine import QUALITY_MAP, DownloadManager, Job, Settings
 from .paths import data_dir
-from .widgets import ROW_HEIGHT, ComboBox, EmptyState, EngineBadge, JobDelegate, SpinBox
+from .widgets import (ROW_HEIGHT, ComboBox, EmptyState, EngineBadge, JobDelegate,
+                      OfferBar, SpinBox, key_action)
 
 BROWSERS = ["", "chrome", "firefox", "edge", "safari", "brave", "chromium", "opera", "vivaldi"]
-ACTIVE = {"Queued", "Resolving", "Downloading", "Processing", "Cancelling"}
-SECTIONS = ["Queue", "Settings", "Engine", "Activity"]
+# Busy states come from the engine so the UI and the workers cannot disagree.
+ACTIVE = engine.BUSY | {"Cancelling"}
+SECTIONS = ["Queue", "History", "Settings", "Engine", "Activity"]
 
 
 # --------------------------------------------------------------------------- #
@@ -88,10 +98,37 @@ class ToolTask(QRunnable):
 # Layout helpers
 # --------------------------------------------------------------------------- #
 
+def row_tag(job: Job) -> str:
+    """The bracketed tag on a row: its format choice and any folder override."""
+    bits = [engine.describe_format(job.fmt)]
+    if job.dest:
+        bits.append(f"to {Path(job.dest).name or job.dest}")
+    return ", ".join(b for b in bits if b)
+
+
 def _clip(text: str, limit: int = 190) -> str:
     """Keep a diagnostic readable in a fixed row. Full text goes in the tooltip."""
     text = " ".join((text or "").split())
     return text if len(text) <= limit else text[:limit].rstrip() + "..."
+
+
+def _parse_speed(text: str) -> float:
+    """
+    Turn a display speed such as "4.2 MB/s" back into bytes per second.
+
+    Reads the formatted string rather than tracking a parallel raw value: one
+    number, one place it is set, no chance of the two disagreeing.
+    """
+    if not text or text == "--":
+        return 0.0
+    units = {"B": 1, "KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3, "TB": 1024 ** 4}
+    parts = text.replace("/s", "").strip().split()
+    if len(parts) != 2:
+        return 0.0
+    try:
+        return float(parts[0]) * units.get(parts[1].upper(), 0)
+    except ValueError:
+        return 0.0
 
 
 def rule() -> QFrame:
@@ -135,6 +172,11 @@ class MainWindow(QMainWindow):
         self.tasks = QThreadPool()
         self.tasks.setMaxThreadCount(1)
 
+        self.store = QueueStore()
+        self.tray: QSystemTrayIcon | None = None
+        self._retry_timers: dict[str, QTimer] = {}
+        self._last_offered = ""
+
         self.setWindowTitle("Ambaar")
         self.setWindowIcon(branding.app_icon())
         self.resize(1120, 720)
@@ -144,6 +186,9 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._refresh_engine()
 
+        QGuiApplication.clipboard().dataChanged.connect(self._on_clipboard)
+
+        QTimer.singleShot(0, self._restore_queue)
         QTimer.singleShot(250, self._first_run_checks)
         if self.settings.auto_update:
             QTimer.singleShot(1600, self._maybe_auto_update)
@@ -163,6 +208,25 @@ class MainWindow(QMainWindow):
         a = QAction("Install ffmpeg", self)
         a.triggered.connect(self._install_ffmpeg)
         m.addAction(a)
+
+        mq = self.menuBar().addMenu("&Queue")
+        for text, keys, fn in (
+            ("Add link from clipboard", "Ctrl+Shift+V", self.paste_and_add),
+            ("Focus the link bar", "Ctrl+L", self._focus_url),
+            ("Download all", "Ctrl+Shift+D", self.start_all_ready),
+            ("Pause all", "Ctrl+Shift+P", self.pause_all),
+            ("Resume all", "Ctrl+Shift+R", self.resume_all),
+        ):
+            a = QAction(text, self)
+            a.setShortcut(QKeySequence(keys))
+            a.triggered.connect(lambda _=False, f=fn: f())
+            mq.addAction(a)
+        mq.addSeparator()
+        for i, name in enumerate(SECTIONS):
+            a = QAction(f"Go to {name}", self)
+            a.setShortcut(QKeySequence(f"Ctrl+{i + 1}"))
+            a.triggered.connect(lambda _=False, n=i: self._show_page(n, sync_nav=True))
+            mq.addAction(a)
 
         m2 = self.menuBar().addMenu("&Folders")
         for text, path_fn in (
@@ -193,6 +257,11 @@ class MainWindow(QMainWindow):
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self._page_queue())
+        self.history_page = HistoryPage(self.store)
+        self.history_page.open_file.connect(self._open_history_file)
+        self.history_page.open_folder.connect(self._open_history_folder)
+        self.history_page.add_again.connect(self._add_from_history)
+        self.stack.addWidget(self.history_page)
         self.stack.addWidget(self._page_settings())
         self.stack.addWidget(self._page_engine())
         self.stack.addWidget(self._page_activity())
@@ -201,6 +270,10 @@ class MainWindow(QMainWindow):
         outer.addWidget(right, 1)
         self.setCentralWidget(shell)
         self.setStatusBar(QStatusBar())
+        # Permanent widget, so a transient status message never wipes the
+        # running totals the user is watching.
+        self.totals = label("", "mono")
+        self.statusBar().addPermanentWidget(self.totals)
         self._status("Ready")
 
     def _sidebar(self) -> QWidget:
@@ -237,7 +310,8 @@ class MainWindow(QMainWindow):
         col.addStretch(1)
 
         self.badge = EngineBadge()
-        self.badge.clicked.connect(lambda: self._show_page(2, sync_nav=True))
+        self.badge.clicked.connect(
+            lambda: self._show_page(SECTIONS.index("Engine"), sync_nav=True))
         holder = QWidget()
         hl = QVBoxLayout(holder)
         hl.setContentsMargins(14, 0, 14, 0)
@@ -256,17 +330,28 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.page_title)
         lay.addStretch(1)
 
+        self.btn_start = QPushButton("Download all")
+        self.btn_pause_all = QPushButton("Pause all")
+        self.btn_resume_all = QPushButton("Resume all")
         self.btn_cancel = QPushButton("Cancel")
         self.btn_retry = QPushButton("Retry")
         self.btn_clear = QPushButton("Clear finished")
-        for b, fn in ((self.btn_cancel, self.cancel_selected),
+        self.btn_clear_all = QPushButton("Clear queue")
+        for b, fn in ((self.btn_start, self.start_all_ready),
+                      (self.btn_pause_all, self.pause_all),
+                      (self.btn_resume_all, self.resume_all),
+                      (self.btn_cancel, self.cancel_selected),
                       (self.btn_retry, self.retry_selected),
-                      (self.btn_clear, self.clear_finished)):
+                      (self.btn_clear, self.clear_finished),
+                      (self.btn_clear_all, self.clear_queue)):
             b.setProperty("variant", "ghost")
             b.setCursor(Qt.PointingHandCursor)
             b.clicked.connect(fn)
             lay.addWidget(b)
-        self.queue_actions = [self.btn_cancel, self.btn_retry, self.btn_clear]
+        self.btn_start.setProperty("variant", "primary")
+        self.queue_actions = [self.btn_start, self.btn_pause_all, self.btn_resume_all,
+                              self.btn_cancel, self.btn_retry,
+                              self.btn_clear, self.btn_clear_all]
         return head
 
     def _url_bar(self) -> QWidget:
@@ -309,15 +394,29 @@ class MainWindow(QMainWindow):
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+
+        self.offer = OfferBar()
+        self.offer.accepted.connect(self._add_offered)
+        lay.addWidget(self.offer)
 
         self.queue = QListWidget()
-        self.queue.setItemDelegate(JobDelegate(self.queue))
+        self._delegate = JobDelegate(self.queue)
+        self._delegate.action.connect(self._on_row_action)
+        self.queue.setItemDelegate(self._delegate)
         self.queue.setSelectionMode(QListWidget.ExtendedSelection)
         self.queue.setMouseTracking(True)
         self.queue.setVerticalScrollMode(QListWidget.ScrollPerPixel)
         self.queue.setFrameShape(QFrame.NoFrame)
         self.queue.setUniformItemSizes(True)
         self.queue.itemDoubleClicked.connect(self._open_item_file)
+        self.queue.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.queue.customContextMenuRequested.connect(self._queue_menu)
+        # Dragging rows reorders the queue. Order decides what "Download all"
+        # starts first and is saved with the queue.
+        self.queue.setDragDropMode(QListWidget.InternalMove)
+        self.queue.setDefaultDropAction(Qt.MoveAction)
+        self.queue.model().rowsMoved.connect(self._on_rows_moved)
         lay.addWidget(self.queue)
 
         self.empty = EmptyState(self.queue)
@@ -350,7 +449,7 @@ class MainWindow(QMainWindow):
         f1.addRow("Quality", row(self.quality))
 
         self.container = ComboBox()
-        self.container.addItems(["mp4", "mkv", "webm"])
+        self.container.addItems(engine.CONTAINERS)
         self.container.setCurrentText(self.settings.container)
         self.container.currentTextChanged.connect(self._save)
         f1.addRow("Container", row(self.container))
@@ -371,7 +470,7 @@ class MainWindow(QMainWindow):
         f2.addRow("", self.audio_only)
 
         self.audio_format = ComboBox()
-        self.audio_format.addItems(["mp3", "m4a", "opus", "flac", "wav"])
+        self.audio_format.addItems(engine.AUDIO_FORMATS)
         self.audio_format.setCurrentText(self.settings.audio_format)
         self.audio_format.setEnabled(self.settings.audio_only)
         self.audio_format.currentTextChanged.connect(self._save)
@@ -440,6 +539,31 @@ class MainWindow(QMainWindow):
         self.archive.setChecked(self.settings.archive_enabled)
         self.archive.toggled.connect(self._save)
         f4.addRow("", self.archive)
+
+        self.restore_queue = QCheckBox("Restore the queue when Ambaar starts")
+        self.restore_queue.setChecked(self.settings.restore_queue)
+        self.restore_queue.toggled.connect(self._save)
+        f4.addRow("", self.restore_queue)
+
+        self.watch = QCheckBox("Offer to add video links I copy")
+        self.watch.setChecked(self.settings.watch_clipboard)
+        self.watch.toggled.connect(self._save)
+        f4.addRow("", self.watch)
+
+        self.retries = SpinBox()
+        self.retries.setRange(0, 10)
+        self.retries.setValue(self.settings.auto_retry)
+        self.retries.valueChanged.connect(self._save)
+        f4.addRow("Automatic retries", row(self.retries))
+        hint2 = label("Network failures are retried after 15 s, 1 min, then 5 min. "
+                      "0 turns it off.", "hint")
+        hint2.setWordWrap(True)
+        f4.addRow("", hint2)
+
+        self.notify = QCheckBox("Notify me when a download finishes")
+        self.notify.setChecked(self.settings.notify_on_finish)
+        self.notify.toggled.connect(self._save)
+        f4.addRow("", self.notify)
         col.addLayout(f4)
         col.addStretch(1)
         return self._scroll(body)
@@ -565,15 +689,42 @@ class MainWindow(QMainWindow):
         # The add bar belongs to the queue; carrying it onto Settings just
         # competes with whatever the user came to that page to change.
         self.url_row.setVisible(index == 0)
+        if SECTIONS[index] == "History":
+            self.history_page.refresh()
         if sync_nav:
             button = self.nav.button(index)
             if button:
                 button.setChecked(True)
 
     def eventFilter(self, obj, event):
-        if obj is self.queue and event.type() in (QEvent.Resize, QEvent.Show):
-            self.empty.setGeometry(self.queue.rect())
+        if obj is self.queue:
+            if event.type() in (QEvent.Resize, QEvent.Show):
+                self.empty.setGeometry(self.queue.rect())
+            elif event.type() == QEvent.KeyPress and self._queue_key(event):
+                return True
         return super().eventFilter(obj, event)
+
+    def _queue_key(self, event) -> bool:
+        """Keyboard control of the queue. True when the key was handled."""
+        if event.matches(QKeySequence.Paste):
+            self.paste_and_add()
+            return True
+        ids = self._selected_ids()
+        if not ids:
+            return False
+        handled = False
+        for jid in ids:
+            job = self.jobs.get(jid)
+            action = key_action(event.key(), job.status) if job else None
+            if action:
+                self._on_row_action(jid, action)
+                handled = True
+        return handled
+
+    def _focus_url(self) -> None:
+        self._show_page(0, sync_nav=True)
+        self.url_input.setFocus()
+        self.url_input.selectAll()
 
     # -- settings ------------------------------------------------------------ #
 
@@ -614,6 +765,10 @@ class MainWindow(QMainWindow):
         s.limit_rate = self.rate.text().strip()
         s.cookies_from_browser = self.cookies.currentText()
         s.archive_enabled = self.archive.isChecked()
+        s.restore_queue = self.restore_queue.isChecked()
+        s.notify_on_finish = self.notify.isChecked()
+        s.watch_clipboard = self.watch.isChecked()
+        s.auto_retry = self.retries.value()
         s.update_channel = self.channel.currentText()
         s.auto_update = self.auto_update.isChecked()
         s.save()
@@ -636,12 +791,68 @@ class MainWindow(QMainWindow):
             return
         self.url_input.clear()
         for url in urls:
-            self.add_job(url)
+            if self._confirm_duplicate(url):
+                self.add_job(url)
+        self._show_page(0, sync_nav=True)
+
+    # -- duplicates and the clipboard ---------------------------------------- #
+
+    def _duplicate_reason(self, url: str) -> str:
+        """Why this link is a repeat, or "" when it is new."""
+        twin = links.find_duplicate(url, self.jobs.values())
+        if twin is not None:
+            return f"It is already in the queue as \u201c{twin.title or twin.url}\u201d."
+        if self.settings.archive_enabled and links.archive_has(
+                url, Path.home() / ".ambaar" / "archive.txt"):
+            return ("Your download archive lists it as downloaded, so the engine "
+                    "will skip it.")
+        past = self.store.history_find(url)
+        if past:
+            return (f"You downloaded \u201c{past['title']}\u201d on "
+                    f"{when(past['finished_at']).split('  ')[0]}.")
+        return ""
+
+    def _confirm_duplicate(self, url: str) -> bool:
+        reason = self._duplicate_reason(url)
+        if not reason:
+            return True
+        reply = QMessageBox.question(
+            self, "Already added", f"{reason}\n\nAdd it again?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        return reply == QMessageBox.Yes
+
+    def _on_clipboard(self) -> None:
+        if not self.settings.watch_clipboard:
+            return
+        text = QGuiApplication.clipboard().text().strip()
+        if not links.is_clipboard_candidate(text) or text == self._last_offered:
+            return
+        self._last_offered = text
+        # A repeat is not worth interrupting for; the user can still paste it by
+        # hand and will be asked then.
+        if self._duplicate_reason(text):
+            return
+        self.offer.show_offer(text)
+
+    def _add_offered(self, url: str) -> None:
+        self.add_job(url)
+        self._show_page(0, sync_nav=True)
+
+    def _add_from_history(self, url: str) -> None:
+        self.add_job(url)
         self._show_page(0, sync_nav=True)
 
     def add_job(self, url: str) -> None:
+        """
+        Stage a link and resolve it. Nothing downloads yet.
+
+        Adding used to start a download immediately, which meant a mistyped or
+        dead link only announced itself after the queue had already committed a
+        thread to it. Resolving first costs a second and tells the user what
+        they actually pasted.
+        """
         self._save()
-        job = Job(url=url, title="")
+        job = Job(url=url, title=url, status=engine.STAGED)
         self.jobs[job.job_id] = job
 
         item = QListWidgetItem()
@@ -652,19 +863,280 @@ class MainWindow(QMainWindow):
         self.items[job.job_id] = item
         self._sync_empty()
 
-        worker = self.manager.submit(job)
+        self._resolve(job)
+
+    def _resolve(self, job: Job) -> None:
+        """Start classification for one job. Used on add and on restore."""
+        job.status = engine.RESOLVING
+        self._refresh(job.job_id)
+        self._persist(job.job_id)
+
+        resolver = self.manager.resolve(job)
+        resolver.signals.resolved.connect(self._on_resolved)
+        resolver.signals.failed.connect(self._on_resolve_failed)
+        resolver.signals.cancelled.connect(self._on_cancelled)
+        resolver.signals.log.connect(self._on_job_log)
+
+    def start_download(self, job_id: str, check_space: bool = True) -> None:
+        """Move a Ready, Paused or finished job into the download pool."""
+        job = self.jobs.get(job_id)
+        if job is None or job.status not in engine.STARTABLE:
+            return
+        if check_space and not self._space_ok([job]):
+            return
+
+        self._save()
+        job.status = engine.QUEUED
+        job.error = ""
+        self._refresh(job_id)
+        self._persist(job_id)
+        self._update_totals()
+
+        worker = self.manager.submit(job, list(self.jobs).index(job_id))
         s = worker.signals
-        s.title.connect(self._on_title)
         s.status.connect(self._on_status)
         s.progress.connect(self._on_progress)
         s.finished.connect(self._on_finished)
         s.failed.connect(self._on_failed)
         s.cancelled.connect(self._on_cancelled)
-        s.log.connect(self._append_log)
+        s.paused.connect(self._on_paused)
+        s.log.connect(self._on_job_log)
+
+    @Slot(str, str)
+    def _on_row_action(self, job_id: str, action: str) -> None:
+        """Every inline button arrives here. One place, so states cannot drift."""
+        job = self.jobs.get(job_id)
+        if job is None:
+            return
+
+        if action in ("download", "resume", "retry"):
+            job.attempts = 0
+            self.start_download(job_id)
+        elif action == "open":
+            item = self.items.get(job_id)
+            if item is not None:
+                self._open_item_file(item)
+        elif action == "pause":
+            self.manager.pause(job_id)
+            self._status("Pausing after the current chunk")
+        elif action == "cancel":
+            self._cancel_job(job_id)
+        elif action == "format":
+            self._choose_format(job_id)
+        elif action == "items":
+            self._choose_items(job_id)
+        elif action == "remove":
+            self._remove_job(job_id)
+        elif action == "folder":
+            self._open_folder(job)
+
+    def _choose_format(self, job_id: str) -> None:
+        job = self.jobs.get(job_id)
+        if job is None or job.status != engine.READY:
+            return
+        avail = space.available_formats(job.sizes) if not job.is_playlist() else ([], [])
+        dlg = FormatDialog(job.title or job.url, job.fmt, self.settings, avail,
+                           job.dest, self)
+        if dlg.exec() != FormatDialog.Accepted:
+            return
+        job.fmt, job.dest = dlg.choice, dlg.dest
+        self._refresh(job_id)
+        self._persist(job_id)
+
+    def _choose_items(self, job_id: str) -> None:
+        job = self.jobs.get(job_id)
+        if job is None or job.status != engine.READY or not job.is_playlist():
+            return
+        entries = engine.unpack_entries(job.entries)
+        if not entries:
+            self._status("This playlist's contents were not saved; remove it and add it again")
+            return
+        dlg = ItemsDialog(job.title, entries, engine.selected_positions(job), self)
+        if dlg.exec() != ItemsDialog.Accepted:
+            return
+        job.items = dlg.spec
+        self._refresh(job_id)
+        self._persist(job_id)
+
+    # -- persistence ---------------------------------------------------------- #
+
+    def _persist(self, job_id: str) -> None:
+        """Write one job back to disk. Called on every state change."""
+        job = self.jobs.get(job_id)
+        if job is None or not self.store.available:
+            return
+        position = list(self.jobs).index(job_id) if job_id in self.jobs else 0
+        self.store.save(job, position)
+
+    def _restore_queue(self) -> None:
+        """
+        Put back whatever the last session left behind.
+
+        Jobs that were mid-flight come back Paused rather than Downloading --
+        their worker died with the process -- so the user chooses when to pick
+        them up again. Ones that never finished resolving resolve again now.
+        """
+        if not self.settings.restore_queue or not self.store.available:
+            return
+
+        restored = discard_incomplete(self.store.load())
+        if not restored:
+            return
+
+        for job in restored:
+            self.jobs[job.job_id] = job
+            item = QListWidgetItem()
+            item.setSizeHint(QSize(0, ROW_HEIGHT))
+            item.setData(Qt.UserRole, self._job_data(job))
+            item.setData(Qt.UserRole + 1, job.job_id)
+            self.queue.addItem(item)
+            self.items[job.job_id] = item
+
+        self._sync_empty()
+        self.store.save_all(list(self.jobs.values()))
+
+        # Anything that never got classified needs resolving before it can show
+        # a Download button.
+        for job in restored:
+            if job.status == engine.STAGED:
+                self._resolve(job)
+
+        paused = sum(1 for j in restored if j.status == engine.PAUSED)
+        tail = f", {paused} paused mid-download" if paused else ""
+        self._status(f"Restored {len(restored)} item(s) from last session{tail}")
+
+    # -- bulk actions ---------------------------------------------------------- #
+
+    def pause_all(self) -> None:
+        running = [j for j in self.jobs.values() if j.status == engine.DOWNLOADING]
+        if not running:
+            self._status("Nothing is downloading.")
+            return
+        self.manager.pause_all()
+        self._status(f"Pausing {len(running)} download(s)")
+
+    def resume_all(self) -> None:
+        paused = [jid for jid, j in self.jobs.items() if j.status == engine.PAUSED]
+        self._start_many(paused)
+        self._status(f"Resuming {len(paused)} download(s)" if paused
+                     else "Nothing is paused.")
+
+    def _update_totals(self) -> None:
+        """
+        Aggregate speed and remaining work, shown in the status bar.
+
+        Per-row numbers answer "how is this one doing"; this answers "can I walk
+        away yet", which is the question a long queue actually raises.
+        """
+        running = [j for j in self.jobs.values()
+                   if j.status in (engine.DOWNLOADING, engine.PROCESSING)]
+        ready = sum(1 for j in self.jobs.values() if j.status == engine.READY)
+        paused = sum(1 for j in self.jobs.values() if j.status == engine.PAUSED)
+        done = sum(1 for j in self.jobs.values() if j.status == engine.DONE)
+
+        bits = []
+        if running:
+            total = 0.0
+            for job in running:
+                # job.speed is already formatted for display, so parse it back
+                # rather than keeping a second raw copy in sync.
+                total += _parse_speed(job.speed)
+            bits.append(f"{len(running)} running")
+            if total > 0:
+                bits.append(f"{engine.human_bytes(total)}/s total")
+        if ready:
+            bits.append(f"{ready} ready")
+        if paused:
+            bits.append(f"{paused} paused")
+        if done:
+            bits.append(f"{done} done")
+
+        self.totals.setText("   ".join(bits) if bits else "")
+
+    # -- notifications --------------------------------------------------------- #
+
+    def _ensure_tray(self) -> QSystemTrayIcon | None:
+        """
+        Lazily create the tray icon used for completion notices.
+
+        Created on demand rather than at startup: on a desktop with no system
+        tray, constructing one early puts a permanently dead icon in the
+        session for no benefit.
+        """
+        if self.tray is not None:
+            return self.tray
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return None
+        icon = branding.app_icon()
+        self.tray = QSystemTrayIcon(icon if not icon.isNull() else QIcon(), self)
+        self.tray.setToolTip("Ambaar")
+        self.tray.show()
+        return self.tray
+
+    def _notify(self, title: str, body: str) -> None:
+        if not self.settings.notify_on_finish:
+            return
+        tray = self._ensure_tray()
+        if tray is not None:
+            tray.showMessage(title, body, QSystemTrayIcon.Information, 6000)
+
+    def start_all_ready(self) -> None:
+        self._start_many([jid for jid, j in self.jobs.items()
+                          if j.status == engine.READY])
+
+    def _start_many(self, job_ids: list[str]) -> None:
+        """Start a batch behind one space question rather than one per row."""
+        jobs = [self.jobs[j] for j in job_ids if j in self.jobs]
+        if not jobs or not self._space_ok(jobs):
+            return
+        for job in jobs:
+            self.start_download(job.job_id, check_space=False)
+
+    def _space_ok(self, jobs: list[Job]) -> bool:
+        """
+        Check the output drive has room, and ask before going ahead if not.
+
+        A shortfall is a question rather than a refusal: the estimates are
+        approximate, and a user who knows better (a second drive mounted at the
+        folder, a quota that is not the real limit) should not be locked out.
+        """
+        # Each distinct folder is its own drive as far as we can tell, so tally
+        # what is headed for each and check them separately.
+        per_dir: dict[str, int] = {}
+        for j in jobs:
+            d = engine.output_dir_for(j, self.settings)
+            per_dir[d] = per_dir.get(d, 0) + engine.estimate_job_bytes(j, self.settings)
+
+        for folder, needed in per_dir.items():
+            free = space.free_bytes(folder)
+            if not space.shortfall(needed, free):
+                continue
+            if needed:
+                detail = (f"These downloads need about {engine.human_bytes(needed)} "
+                          f"and {engine.human_bytes(free)} is free.")
+            else:
+                detail = f"Only {engine.human_bytes(free)} is free."
+            reply = QMessageBox.warning(
+                self, "Low disk space",
+                f"{detail}\n\nThe drive holding {folder} may fill "
+                "up mid-download. Partial files are kept, so a stopped download "
+                "resumes once there is room.\n\nDownload anyway?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return False
+        return True
 
     @staticmethod
     def _job_data(job: Job) -> dict:
+        # For a playlist the row describes what will download, not the whole list.
+        selected, duration = None, job.duration
+        if job.is_playlist():
+            selected, _, duration = engine.selection_summary(job)
         return {"url": job.url, "title": job.title, "status": job.status,
+                "kind": job.kind, "item_count": job.item_count,
+                "selected": selected,
+                "duration": duration, "uploader": job.uploader,
+                "thumb": job.thumb, "fmt_label": row_tag(job),
                 "percent": job.percent, "speed": job.speed, "eta": job.eta,
                 "size": job.size, "error": job.error}
 
@@ -673,10 +1145,44 @@ class MainWindow(QMainWindow):
         if item:
             item.setData(Qt.UserRole, self._job_data(self.jobs[job_id]))
 
-    @Slot(str, str)
-    def _on_title(self, job_id: str, title: str) -> None:
-        self.jobs[job_id].title = title
+    # -- resolve results ------------------------------------------------------ #
+
+    @Slot(str, dict)
+    def _on_resolved(self, job_id: str, facts: dict) -> None:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return
+        job.kind = facts.get("kind", engine.KIND_UNKNOWN)
+        job.title = facts.get("title") or job.url
+        job.item_count = int(facts.get("item_count") or 0)
+        job.duration = int(facts.get("duration") or 0)
+        job.uploader = facts.get("uploader") or ""
+        job.status = engine.READY
+        job.thumb = facts.get("thumb") or ""
+        job.entries = facts.get("entries") or ""
+        job.sizes = facts.get("sizes") or ""
         self._refresh(job_id)
+        self._persist(job_id)
+        self._update_totals()
+        self.manager.release_resolver(job_id)
+
+        what = "Playlist" if job.is_playlist() else "Video"
+        self._status(f"{what} ready: {job.title}")
+
+    @Slot(str, str)
+    def _on_resolve_failed(self, job_id: str, error: str) -> None:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return
+        job.status, job.error = engine.FAILED, error
+        self._refresh(job_id)
+        self._persist(job_id)
+        self._update_totals()
+        self.manager.release_resolver(job_id)
+        self._append_log(f"COULD NOT RESOLVE  {job.url}\n{error}\n")
+        self._status("That link could not be read. See Activity.")
+
+    # -- download results ----------------------------------------------------- #
 
     @Slot(str, str)
     def _on_status(self, job_id: str, status: str) -> None:
@@ -688,32 +1194,144 @@ class MainWindow(QMainWindow):
         job = self.jobs[job_id]
         job.percent, job.speed, job.eta, job.size = pct, speed, eta, size
         self._refresh(job_id)
+        self._update_totals()
+        # Persisted on whole-percent steps only: writing on every callback would
+        # mean a disk write several times a second per download for no gain.
+        if int(pct) != int(getattr(job, "_last_saved_pct", -1)):
+            job._last_saved_pct = pct
+            self._persist(job_id)
 
     @Slot(str, str)
     def _on_finished(self, job_id: str, path: str) -> None:
         job = self.jobs[job_id]
-        job.status, job.filepath, job.percent = "Done", path, 100.0
+        job.status, job.filepath, job.percent = engine.DONE, path, 100.0
+        job.folder = str(Path(path).parent) if path else self.settings.output_dir
         job.speed = job.eta = ""
+        job.redo, job.attempts = False, 0
         self._refresh(job_id)
+        self._persist(job_id)
+        self.store.add_history(job)
+        self._update_totals()
         self.manager.release(job_id)
         self._status(f"Finished: {job.title or job.url}")
+        self._notify("Download finished", job.title or job.url)
 
     @Slot(str, str)
     def _on_failed(self, job_id: str, error: str) -> None:
         job = self.jobs[job_id]
-        job.status, job.error = "Failed", error
+        engine.append_log(job, f"FAILED: {error}")
+        if self._schedule_retry(job, error):
+            return
+        job.status, job.error = engine.FAILED, error
         job.speed = job.eta = ""
         self._refresh(job_id)
+        self._persist(job_id)
+        self._update_totals()
         self.manager.release(job_id)
         self._append_log(f"FAILED  {job.url}\n{error}\n")
         self._status("A download failed. See Activity for detail.")
 
+    def _schedule_retry(self, job: Job, error: str) -> bool:
+        """
+        Wait out a transient failure and try again. True when a retry is set.
+
+        The job sits in Queued with a countdown in its detail line, so the
+        failure is visible rather than hidden, and Cancel works because it has
+        a timer to stop.
+        """
+        limit = self.settings.auto_retry
+        if not engine.should_retry(error, job.attempts, limit):
+            return False
+        job.attempts += 1
+        delay = engine.retry_delay(job.attempts)
+        reason = error.strip().splitlines()[0][:80] if error.strip() else "network error"
+        job.status = engine.QUEUED
+        job.error = f"Retrying in {delay} s ({job.attempts} of {limit}): {reason}"
+        job.speed = job.eta = ""
+        engine.append_log(job, job.error)
+        self._refresh(job.job_id)
+        self._persist(job.job_id)
+        self._update_totals()
+        self.manager.release(job.job_id)
+
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda jid=job.job_id: self._fire_retry(jid))
+        self._retry_timers[job.job_id] = timer
+        timer.start(delay * 1000)
+        return True
+
+    def _fire_retry(self, job_id: str) -> None:
+        self._stop_retry(job_id)
+        job = self.jobs.get(job_id)
+        if job is None or job.status != engine.QUEUED:
+            return
+        job.status, job.error = engine.READY, ""
+        # The space question was answered when the download first started.
+        self.start_download(job_id, check_space=False)
+
+    @Slot(str)
+    def _on_paused(self, job_id: str) -> None:
+        job = self.jobs[job_id]
+        job.status, job.speed, job.eta = engine.PAUSED, "", ""
+        self._refresh(job_id)
+        self._persist(job_id)
+        self._update_totals()
+        self.manager.release(job_id)
+        self._status(f"Paused at {job.percent:.0f}% -- Resume picks up where it stopped")
+
     @Slot(str)
     def _on_cancelled(self, job_id: str) -> None:
-        job = self.jobs[job_id]
-        job.status, job.speed, job.eta = "Cancelled", "", ""
+        job = self.jobs.get(job_id)
+        if job is None:
+            return
+        job.status, job.speed, job.eta = engine.CANCELLED, "", ""
         self._refresh(job_id)
+        self._persist(job_id)
+        self._update_totals()
         self.manager.release(job_id)
+        self.manager.release_resolver(job_id)
+
+    def _on_rows_moved(self, *_args) -> None:
+        """Rebuild job order from the list after a drag, and save it."""
+        order = [self.queue.item(r).data(Qt.UserRole + 1)
+                 for r in range(self.queue.count())]
+        self.jobs = {jid: self.jobs[jid] for jid in order if jid in self.jobs}
+        # Rows already waiting for a download slot follow the new order too, so a
+        # drag changes what runs next and not only what Download all starts.
+        self.manager.apply_order(list(self.jobs))
+        if self.store.available:
+            self.store.save_all(list(self.jobs.values()))
+
+    def _redownload(self, job_id: str) -> None:
+        """Fetch a finished item again, replacing the file."""
+        job = self.jobs.get(job_id)
+        if job is None or job.status not in (engine.DONE, engine.FAILED,
+                                             engine.CANCELLED):
+            return
+        job.redo, job.attempts = True, 0
+        job.status, job.percent, job.error, job.filepath = engine.READY, 0.0, "", ""
+        self._refresh(job_id)
+        self.start_download(job_id)
+
+    def _show_log(self, job_id: str) -> None:
+        job = self.jobs.get(job_id)
+        if job is not None:
+            LogDialog(job.title or job.url, job.log, job.error, self).exec()
+
+    def _open_history_file(self, entry: dict) -> None:
+        path = entry.get("filepath") or ""
+        if entry.get("kind") != "playlist" and path and Path(path).exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        else:
+            self._open_history_folder(entry)
+
+    def _open_history_folder(self, entry: dict) -> None:
+        folder = entry.get("folder") or ""
+        if folder and Path(folder).is_dir():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        else:
+            self._status("That folder no longer exists.")
 
     def _selected_ids(self) -> list[str]:
         return [i.data(Qt.UserRole + 1) for i in self.queue.selectedItems()]
@@ -723,29 +1341,170 @@ class MainWindow(QMainWindow):
         for jid in ids:
             job = self.jobs.get(jid)
             if job and job.status in ACTIVE:
-                self.manager.cancel(jid)
-                job.status = "Cancelling"
-                self._refresh(jid)
+                self._cancel_job(jid)
+
+    def _cancel_job(self, job_id: str) -> None:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return
+        # A job waiting out a retry delay has no worker to stop, only a timer.
+        if self._stop_retry(job_id):
+            job.status, job.error = engine.CANCELLED, ""
+            self._refresh(job_id)
+            self._persist(job_id)
+            self._update_totals()
+            return
+        self.manager.cancel(job_id)
+        job.status = "Cancelling"
+        self._refresh(job_id)
+
+    def _stop_retry(self, job_id: str) -> bool:
+        timer = self._retry_timers.pop(job_id, None)
+        if timer is None:
+            return False
+        timer.stop()
+        timer.deleteLater()
+        return True
 
     def retry_selected(self) -> None:
-        for jid in self._selected_ids():
-            job = self.jobs.get(jid)
-            if job and job.status in {"Failed", "Cancelled"}:
-                self.add_job(job.url)
+        """Restart in place rather than adding a second row for the same link."""
+        self._start_many([jid for jid in self._selected_ids()
+                          if self.jobs.get(jid)
+                          and self.jobs[jid].status in engine.STARTABLE])
 
     def clear_finished(self) -> None:
-        for jid in [j for j, job in self.jobs.items()
-                    if job.status in {"Done", "Cancelled"}]:
-            item = self.items.pop(jid, None)
-            if item:
-                self.queue.takeItem(self.queue.row(item))
-            self.jobs.pop(jid, None)
+        self._remove(set(engine.TERMINAL))
+
+    def clear_queue(self) -> None:
+        """Cancel everything in flight and empty the list."""
+        active = [j for j in self.jobs.values() if j.status in ACTIVE]
+        if active:
+            reply = QMessageBox.question(
+                self, "Clear the queue",
+                f"{len(active)} job(s) are still running. Cancel them and clear "
+                "the list?\n\nPartial files are kept, so adding a link again "
+                "resumes rather than starting over.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return
+        self.manager.cancel_all()
+        self.queue.clear()
+        self.items.clear()
+        self.jobs.clear()
+        self.store.clear()
+        self._sync_empty()
+        self._update_totals()
+        self._status("Queue cleared")
+
+    def _remove(self, statuses: set[str]) -> None:
+        for jid in [j for j, job in self.jobs.items() if job.status in statuses]:
+            self._remove_job(jid)
         self._sync_empty()
 
-    def _open_item_file(self, item: QListWidgetItem) -> None:
+    def _remove_job(self, job_id: str) -> None:
+        """Drop one row, stopping its worker first if it is still running."""
+        job = self.jobs.get(job_id)
+        if job is None:
+            return
+        self._stop_retry(job_id)
+        if job.status in ACTIVE:
+            self.manager.cancel(job_id)
+        item = self.items.pop(job_id, None)
+        if item is not None:
+            self.queue.takeItem(self.queue.row(item))
+        self.jobs.pop(job_id, None)
+        self.store.remove(job_id)
+        self._sync_empty()
+        self._update_totals()
+
+    def remove_selected(self) -> None:
+        for jid in self._selected_ids():
+            self._remove_job(jid)
+
+    def _open_folder(self, job: Job) -> None:
+        folder = job.folder or str(Path(self.settings.output_dir).expanduser())
+        if Path(folder).is_dir():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        else:
+            self._status("That folder no longer exists.")
+
+    def _queue_menu(self, pos) -> None:
+        """
+        Right-click actions.
+
+        The primary actions come from the same table the row buttons use, so
+        the menu can never offer something the buttons do not, or miss one they
+        do. Everything below the separator is menu-only: useful, but not worth
+        a button on every row.
+        """
+        item = self.queue.itemAt(pos)
+        if item is None:
+            return
+        if not item.isSelected():
+            self.queue.setCurrentItem(item)
+
         job = self.jobs.get(item.data(Qt.UserRole + 1))
-        if job and job.filepath and Path(job.filepath).exists():
+        if job is None:
+            return
+
+        menu = QMenu(self)
+        for action, label, _ in JobDelegate.buttons_for(job.status, job.kind):
+            if action == "pause":
+                label = "Pause (keeps the partial file)"
+            act = menu.addAction(label)
+            act.triggered.connect(
+                lambda _=False, a=action, j=job.job_id: self._on_row_action(j, a))
+
+        if job.status == engine.DONE and not job.is_playlist():
+            a_play = menu.addAction("Play")
+            a_play.triggered.connect(lambda: self._open_item_file(item))
+
+        if job.status in (engine.DONE, engine.FAILED, engine.CANCELLED):
+            a_again = menu.addAction("Download again")
+            a_again.triggered.connect(lambda: self._redownload(job.job_id))
+
+        menu.addSeparator()
+        a_copy = menu.addAction("Copy link")
+        a_copy.triggered.connect(lambda: QGuiApplication.clipboard().setText(job.url))
+
+        a_log = menu.addAction("View log")
+        a_log.triggered.connect(lambda: self._show_log(job.job_id))
+
+        if job.error:
+            a_err = menu.addAction("Copy error")
+            a_err.triggered.connect(lambda: QGuiApplication.clipboard().setText(job.error))
+
+        if job.status not in ACTIVE:
+            menu.addSeparator()
+            a_rm = menu.addAction("Remove from list")
+            a_rm.triggered.connect(self.remove_selected)
+
+        menu.exec(self.queue.mapToGlobal(pos))
+
+    def _open_item_file(self, item: QListWidgetItem) -> None:
+        """
+        Double-click opens the result the way the user expects it.
+
+        A video plays in whatever the system uses for video. A playlist has no
+        single file to play, so it opens the folder its episodes landed in.
+        """
+        job = self.jobs.get(item.data(Qt.UserRole + 1))
+        if job is None:
+            return
+
+        if job.status != engine.DONE:
+            if job.status == engine.READY:
+                self.start_download(job.job_id)
+            return
+
+        if job.is_playlist():
+            self._open_folder(job)
+            return
+
+        if job.filepath and Path(job.filepath).exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(job.filepath))
+        else:
+            self._open_folder(job)
 
     def _sync_empty(self) -> None:
         self.empty.setVisible(self.queue.count() == 0)
@@ -943,6 +1702,13 @@ class MainWindow(QMainWindow):
     def _append_log(self, line: str) -> None:
         self.log_view.append(line)
 
+    @Slot(str, str)
+    def _on_job_log(self, job_id: str, line: str) -> None:
+        job = self.jobs.get(job_id)
+        if job is not None:
+            engine.append_log(job, line)
+        self._append_log(line)
+
     def _append_update_log(self, line: str) -> None:
         self.update_log.append(line)
 
@@ -962,6 +1728,12 @@ class MainWindow(QMainWindow):
                 return
         self.manager.cancel_all()
         self._save()
+        # Save the list as it stands before the workers are torn down, so a
+        # download interrupted by quitting comes back as Paused rather than
+        # whatever it happened to be mid-write.
+        if self.store.available:
+            self.store.save_all(list(self.jobs.values()))
+            self.store.close()
         event.accept()
 
 

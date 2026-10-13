@@ -44,8 +44,16 @@ if [[ -n "${CONDA_DEFAULT_ENV:-}" ]]; then
   echo "         Run 'conda deactivate' first, or PyInstaller may bundle conda's Qt."
 fi
 
+if pgrep -x ambaar >/dev/null 2>&1; then
+  echo "ambaar is running. Stopping it so the build can clear dist/."
+  pkill -x ambaar || true
+  sleep 2
+fi
+
 echo "Installing build dependencies"
-"$PY" -m pip install -q -U -r requirements.txt
+# No -U here: requirements.txt pins a floor, not a ceiling, and "-U" would
+# silently upgrade Qt on every build.
+"$PY" -m pip install -q -r requirements.txt
 "$PY" -m pip install -q -U pyinstaller pillow
 echo "PyInstaller $("$PY" -c 'import PyInstaller;print(PyInstaller.__version__)')  /  Qt $("$PY" -c 'from PySide6 import QtCore;print(QtCore.qVersion())')"
 

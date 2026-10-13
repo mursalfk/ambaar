@@ -45,8 +45,22 @@ if ($env:CONDA_DEFAULT_ENV) {
     Write-Host "         Run 'conda deactivate' first, or PyInstaller may bundle conda's Qt." -ForegroundColor Yellow
 }
 
+# A running ambaar.exe holds its Qt plugin DLLs open, so PyInstaller cannot
+# clear dist\ and the build dies at COLLECT with "Access is denied" on
+# qwindows.dll -- an error that reads like a permissions problem and is not.
+$running = Get-Process ambaar -ErrorAction SilentlyContinue
+if ($running) {
+    Write-Host "ambaar.exe is running ($($running.Count) process(es)). Stopping it." -ForegroundColor Yellow
+    $running | Stop-Process -Force
+    Start-Sleep -Seconds 2
+}
+
 Write-Host "Installing build dependencies"
-& $Py -m pip install -q -U -r requirements.txt
+# No -U here. requirements.txt pins a floor, not a ceiling, so "-U" quietly
+# upgrades PySide6 on every build -- which means the Qt you ship is whatever
+# shipped that morning, and a packaging regression lands without any change of
+# yours. Build tools are a different matter; those should stay current.
+& $Py -m pip install -q -r requirements.txt
 & $Py -m pip install -q -U pyinstaller pillow
 
 $pyi = & $Py -c "import PyInstaller;print(PyInstaller.__version__)"

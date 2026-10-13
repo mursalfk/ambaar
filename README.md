@@ -48,13 +48,15 @@ the launcher picks up the icon.
 
 ### Your first download
 
-1. Copy a video link.
+1. Copy a video or playlist link.
 2. Press **Paste**, or paste into the bar and press Enter.
-3. That is the whole flow. The row appears in the queue and starts immediately.
+3. Ambaar checks the link and adds it to the queue with a **VIDEO** or
+   **PLAYLIST** tag, a thumbnail, and its title. Nothing downloads yet.
+4. Press **Download** on the row, or **Download all** in the header.
 
-You can paste several links at once — separate them with spaces or commas and
-each becomes its own job. Playlist links download only the first video unless
-you turn on **Download every item in a playlist** in Settings.
+Paste several links at once, separated by spaces or commas; each becomes its
+own row. A link that is not a video or playlist is rejected with the reason.
+A playlist downloads every item into its own folder.
 
 **ffmpeg is required** for anything above 360p. On first run Ambaar detects
 whether you have it and offers a one-click install on Windows and Linux; on
@@ -65,26 +67,99 @@ stream.
 
 ### Reading the queue
 
-Each row carries a status mark, the title, the source link, and live metrics.
-The marks are shapes rather than colours alone, so the queue stays readable if
-you cannot separate the ember from the green.
+Each row carries a thumbnail, a status mark, the title, a VIDEO or PLAYLIST
+tag, and live metrics. The marks are shapes rather than colours alone, so the
+queue stays readable if you cannot separate the ember from the green. States
+that share a shape are told apart by the status word beside it.
 
 | Mark | State | Meaning |
 |---|---|---|
-| square | Queued | waiting for a free slot |
-| arrow | Resolving | fetching metadata, no bytes yet |
+| square | Ready | checked and waiting for you to press Download |
+| square | Queued | waiting for a free slot, or for a retry countdown |
+| square | Paused | stopped; partial file kept, press Resume |
+| arrow | Resolving | checking the link, no bytes yet |
 | arrow | Downloading | transferring; the hairline at the row's base is progress |
 | rotated square | Processing | ffmpeg is merging, converting, or embedding |
-| check | Done | finished — double-click the row to open the file |
+| check | Done | finished |
 | cross | Failed | the second line explains why |
-| dash | Cancelled | stopped; partial file kept and will resume |
+| dash | Cancelled | stopped by you |
 
-**Double-click a finished row** to open the file. **Select rows** and use
-Cancel, Retry, or Clear finished in the header. Cancel with nothing selected
-cancels everything.
+Buttons sit on the row and change with its state:
 
-Cancelled and failed downloads keep their partial files, so retrying resumes
-rather than starting over.
+| State | Buttons |
+|---|---|
+| Ready | Download, Options, Remove (playlists also get Items) |
+| Downloading | Pause, Cancel |
+| Paused | Resume, Cancel |
+| Done | Open folder, Remove |
+| Failed, Cancelled | Retry, Remove |
+
+**Double-click a row** to act on it: a finished video plays in your default
+player, a finished playlist opens its folder, and a Ready row starts.
+Right-click shows the same actions as the buttons.
+
+**Pause** keeps the partial file and **Resume** continues from it, even after
+you close the app. **Pause all** and **Resume all** act on the whole queue, and
+the status bar shows the total speed and remaining count.
+
+The queue is saved. Close Ambaar mid-download and the row returns as Paused;
+Ready rows stay Ready. Desktop notifications announce finished downloads and can
+be turned off in Settings.
+
+Retrying a failed or cancelled row resumes from its partial file rather than
+starting over.
+
+### Choosing what to download
+
+**Options** on a Ready row sets that one item's format and folder without
+touching your global settings: quality ceiling, codec (H.264, VP9 or AV1),
+container, audio-only, and a **Save to** folder. The quality and codec lists
+show only what the video actually offers. Quality is a ceiling and a codec is a
+preference, so a video with no AV1 stream still downloads at its best.
+
+**Items** on a playlist row lists every video with a checkbox, so you can take
+3 of 40. The row then reads "3 of 40 items".
+
+Before a download starts, Ambaar compares its estimated size with the free space
+on the destination drive and asks before going ahead if it looks short. The
+estimate is approximate, so it is a question, not a refusal.
+
+### Keeping track
+
+**Duplicates.** Adding a link that is already in the queue, in your download
+archive, or in your history asks first. Different forms of the same link
+(`youtu.be`, `watch?v=`, shorts, tracking suffixes) count as the same video.
+
+**History** keeps everything that finished, after you remove the row from the
+queue. Search it, open the file or folder, or add a link again.
+
+**Clipboard.** Turn on *Offer to add video links I copy* in Settings and copying
+a YouTube, Vimeo, TikTok or similar link shows a one-line offer above the queue.
+It is off by default and never adds anything on its own.
+
+**Automatic retries.** Network failures are retried after 15 seconds, 1 minute,
+then 5 minutes, up to the number set in Settings (0 turns it off). The row shows
+the countdown and Cancel stops it. Failures that will not fix themselves, such
+as a private video, a stale engine or a full disk, are not retried.
+
+**Per-item log.** Right-click a row and choose *View log* to see exactly what the
+engine did for that item. *Download again* replaces a finished file.
+
+**Reorder** by dragging rows. The order decides what *Download all* starts first
+and is saved with the queue.
+
+### Keyboard
+
+| Key | Does |
+|---|---|
+| Ctrl+Shift+V | add the link on the clipboard |
+| Ctrl+L | focus the link bar |
+| Ctrl+1 to 5 | go to Queue, History, Settings, Engine, Activity |
+| Ctrl+Shift+D / P / R | download all / pause all / resume all |
+| Space | on selected rows: pause, resume, download or retry, whichever fits |
+| Enter | open a finished item, or start a Ready one |
+| Delete | remove selected rows that are not running |
+| Ctrl+V (queue focused) | add the link on the clipboard |
 
 ### Settings worth knowing
 
@@ -353,6 +428,11 @@ python packaging/make_icons.py    # per-size PNGs, .ico, .icns on macOS
 | `ambaar/branding.py` | window icon and Windows taskbar identity |
 | `ambaar/theme.py` | every colour, font, and metric in the app |
 | `ambaar/widgets.py` | painted marks, row delegate, empty state |
+| `ambaar/store.py` | SQLite queue and history |
+| `ambaar/links.py` | link keys, duplicate detection, clipboard filter |
+| `ambaar/space.py` | size estimates and the disk-space check |
+| `ambaar/formatdialog.py`, `itemsdialog.py`, `logdialog.py`, `historypage.py` | per-item options, playlist picker, log, history |
+| `ambaar/thumbs.py` | thumbnail cache |
 | `ambaar/ffmpeg.py` | ffmpeg discovery and download |
 | `ambaar/paths.py` | per-user data locations |
 
